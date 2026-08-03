@@ -68,7 +68,7 @@ Ondersteunde uploads zijn MP3, M4A, WAV, OGG, WebM, AAC en FLAC, met een maximum
 Bij een upload bewaart de server:
 
 - het originele bestand, ongewijzigd;
-- een WebM/Opus-versie van 128 kbit/s voor afspelen in de browser.
+- een WebM/Opus-versie van 196 kbit/s voor afspelen in de browser.
 
 Verwijder je een nummer uit een conceptinzending, dan verwijdert de server beide audiobestanden direct mee. Audio van een definitieve inzending kan niet via de website worden verwijderd.
 

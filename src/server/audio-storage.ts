@@ -134,7 +134,7 @@ async function transcodeToOpus(inputPath: string, outputPath: string) {
       "-map_metadata", "-1",
       "-vn",
       "-c:a", "libopus",
-      "-b:a", "128k",
+      "-b:a", "196k",
       "-vbr", "on",
       "-compression_level", "10",
       "-application", "audio",
