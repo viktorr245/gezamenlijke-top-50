@@ -98,6 +98,28 @@ import ProgressMarks from "../components/ProgressMarks.astro";
       </div>
     </form>
   </dialog>
+
+  <dialog class="manual-track-dialog youtube-audio-dialog" id="youtube-audio-dialog" aria-labelledby="youtube-audio-title">
+    <button class="manual-track-close" type="button" data-close-youtube aria-label="Sluiten">
+      <i class="ph ph-x" aria-hidden="true"></i>
+    </button>
+    <p class="eyebrow">Audio toevoegen</p>
+    <h2 id="youtube-audio-title">Haal audio uit YouTube.</h2>
+    <p>Plak de link van één openbare video voor <strong id="youtube-audio-track"></strong>. De beste beschikbare audiobron blijft bewaard; voor de website en de cd’s maken we automatisch de juiste versies.</p>
+
+    <form class="manual-track-form youtube-audio-form" id="youtube-audio-form" novalidate>
+      <label class="manual-field manual-field--wide" for="youtube-audio-url">
+        <span>YouTube-link</span>
+        <input id="youtube-audio-url" name="youtubeUrl" type="url" inputmode="url" autocomplete="off" maxlength="2048" placeholder="https://www.youtube.com/watch?v=…" required />
+        <small>Maximaal 100 MB. Afspeellijsten, privévideo’s en andere websites worden niet geaccepteerd.</small>
+      </label>
+      <p class="manual-track-error" id="youtube-audio-error" role="alert" aria-live="assertive"></p>
+      <div class="manual-track-actions">
+        <button class="outlined-action youtube-audio-submit" type="submit">Audio ophalen</button>
+        <button class="text-action" type="button" data-close-youtube>Annuleren</button>
+      </div>
+    </form>
+  </dialog>
 </AppShell>
 
 <script>
@@ -114,6 +136,8 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     duration?: number;
     uploadedAt: string;
     url: string;
+    source?: "upload" | "youtube";
+    sourceUrl?: string;
   };
 
   type FinalSubmission = {
@@ -141,6 +165,13 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   const manualAlbum = document.querySelector<HTMLInputElement>("#manual-album")!;
   const manualError = document.querySelector<HTMLElement>("#manual-track-error")!;
   const manualSubmit = manualForm.querySelector<HTMLButtonElement>('[type="submit"]')!;
+  const youtubeDialog = document.querySelector<HTMLDialogElement>("#youtube-audio-dialog")!;
+  const youtubeForm = document.querySelector<HTMLFormElement>("#youtube-audio-form")!;
+  const youtubeInput = document.querySelector<HTMLInputElement>("#youtube-audio-url")!;
+  const youtubeTrackName = document.querySelector<HTMLElement>("#youtube-audio-track")!;
+  const youtubeError = document.querySelector<HTMLElement>("#youtube-audio-error")!;
+  const youtubeSubmit = youtubeForm.querySelector<HTMLButtonElement>('[type="submit"]')!;
+  const youtubeCloseButtons = Array.from(youtubeDialog.querySelectorAll<HTMLButtonElement>("[data-close-youtube]"));
   const count = document.querySelector<HTMLElement>("#submission-count")!;
   const audioProgress = document.querySelector<HTMLElement>("#submission-audio-progress")!;
   const marks = Array.from(document.querySelectorAll<HTMLElement>("#submission-progress-marks .progress-mark"));
@@ -151,7 +182,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   const searchCache = new Map<string, Track[]>();
   const currentSearchTracks = new Map<string, Track>();
   const audioRecords = new Map<string, AudioRecord>();
-  const uploadingTracks = new Set<string>();
+  const audioTasks = new Map<string, "upload" | "youtube">();
   const removingTracks = new Set<string>();
   const playbackPositions = new Map<string, number>();
   const previewAudio = new Audio();
@@ -169,9 +200,10 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   let finalSubmission: FinalSubmission | undefined;
   let addingTrack = false;
   let finalizingSubmission = false;
+  let youtubeTrackId: string | undefined;
 
   function submissionBusy(): boolean {
-    return addingTrack || finalizingSubmission || removingTracks.size > 0 || uploadingTracks.size > 0;
+    return addingTrack || finalizingSubmission || removingTracks.size > 0 || audioTasks.size > 0;
   }
 
   function escapeHtml(value: unknown): string {
@@ -271,7 +303,9 @@ import ProgressMarks from "../components/ProgressMarks.astro";
       && (record.duration === undefined || (typeof record.duration === "number" && Number.isFinite(record.duration) && record.duration > 0))
       && typeof record.uploadedAt === "string"
       && typeof record.url === "string"
-      && record.url.startsWith("/api/audio/"),
+      && record.url.startsWith("/api/audio/")
+      && (record.source === undefined || record.source === "upload" || record.source === "youtube")
+      && (record.sourceUrl === undefined || typeof record.sourceUrl === "string"),
     );
   }
 
@@ -319,10 +353,11 @@ import ProgressMarks from "../components/ProgressMarks.astro";
         </div>`;
     }
 
-    if (uploadingTracks.has(track.id)) {
+    const audioTask = audioTasks.get(track.id);
+    if (audioTask) {
       return `
         <div class="submission-audio submission-audio--uploading">
-          <span class="audio-inline-status"><span class="search-loader" aria-hidden="true"></span> ${record ? "Nieuw bestand uploaden…" : "Audio uploaden…"}</span>
+          <span class="audio-inline-status"><span class="search-loader" aria-hidden="true"></span> ${audioTask === "youtube" ? "Beste YouTube-audio ophalen en verwerken…" : record ? "Nieuw bestand uploaden…" : "Audio uploaden…"}</span>
         </div>`;
     }
 
@@ -333,13 +368,18 @@ import ProgressMarks from "../components/ProgressMarks.astro";
             <i class="ph ph-warning-circle" aria-hidden="true"></i>
             <span>
               <strong>Audio ontbreekt</strong>
-              <small class="audio-drop-instruction">Sleep audio hierheen of kies een bestand.</small>
+              <small class="audio-drop-instruction">Sleep een bestand hierheen, kies er één of gebruik YouTube.</small>
               <small class="audio-drop-release">Laat los om het bestand toe te voegen.</small>
             </span>
           </span>
-          <button class="outlined-action audio-upload-action" type="button" data-upload-audio ${uploadDisabled ? "disabled" : ""}>
-            <i class="ph ph-upload-simple" aria-hidden="true"></i><span>Audio toevoegen</span>
-          </button>
+          <div class="audio-source-actions" aria-label="Kies een audiobron">
+            <button class="outlined-action audio-upload-action" type="button" data-upload-audio ${uploadDisabled ? "disabled" : ""}>
+              <i class="ph ph-upload-simple" aria-hidden="true"></i><span>Bestand</span>
+            </button>
+            <button class="text-action youtube-audio-action" type="button" data-youtube-audio ${uploadDisabled ? "disabled" : ""}>
+              <i class="ph ph-youtube-logo" aria-hidden="true"></i><span>YouTube</span>
+            </button>
+          </div>
           ${input}
         </div>`;
     }
@@ -350,7 +390,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
       <div class="submission-audio submission-audio--ready" data-row-player ${finalSubmission || uploadDisabled ? "" : "data-audio-drop"}>
         <span class="audio-ready-label" title="${escapeHtml(record.originalName)}">
           <i class="ph ph-check-circle" aria-hidden="true"></i>
-          <span><strong>Audio toegevoegd</strong><small>${escapeHtml(record.originalName)}${finalSubmission ? "" : " · sleep om te vervangen"}</small></span>
+          <span><strong>${record.source === "youtube" ? "YouTube-audio toegevoegd" : "Audio toegevoegd"}</strong><small>${escapeHtml(record.originalName)}${finalSubmission ? "" : " · sleep om te vervangen"}</small></span>
         </span>
         <div class="row-audio-player">
           <button class="row-audio-toggle" type="button" data-row-play aria-label="Speel ${escapeHtml(track.title)} af" aria-pressed="false">
@@ -370,7 +410,10 @@ import ProgressMarks from "../components/ProgressMarks.astro";
           />
           <output class="row-audio-time" for="audio-seek-${escapeHtml(track.id)}" data-row-time>${formatDuration(Math.floor(position))} / ${formatDuration(duration)}</output>
         </div>
-        ${finalSubmission ? "" : `<button class="text-action audio-replace-action" type="button" data-upload-audio ${uploadDisabled ? "disabled" : ""}>Vervang</button>${input}`}
+        ${finalSubmission ? "" : `<div class="audio-replace-actions" aria-label="Audio vervangen">
+          <button class="text-action audio-replace-action" type="button" data-upload-audio ${uploadDisabled ? "disabled" : ""}>Bestand</button>
+          <button class="text-action audio-replace-action" type="button" data-youtube-audio ${uploadDisabled ? "disabled" : ""}>YouTube</button>
+        </div>${input}`}
       </div>`;
   }
 
@@ -411,6 +454,30 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     manualError.textContent = "";
     manualDialog.showModal();
     window.requestAnimationFrame(() => manualTitle.focus());
+  }
+
+  function closeYouTubeDialog() {
+    if (!youtubeDialog.open || audioTasks.size > 0) return;
+    youtubeDialog.close();
+    youtubeTrackId = undefined;
+    youtubeForm.reset();
+    youtubeError.textContent = "";
+  }
+
+  function openYouTubeDialog(trackId: string) {
+    if (isSubmissionLocked() || submissionBusy()) return;
+    const track = getTrack(trackId);
+    if (!track) return;
+    youtubeTrackId = trackId;
+    youtubeTrackName.textContent = `${track.artist} — ${track.title}`;
+    youtubeInput.value = audioRecords.get(trackId)?.sourceUrl ?? "";
+    youtubeError.textContent = "";
+    youtubeSubmit.disabled = false;
+    youtubeSubmit.textContent = "Audio ophalen";
+    youtubeInput.disabled = false;
+    youtubeCloseButtons.forEach((button) => button.disabled = false);
+    youtubeDialog.showModal();
+    window.requestAnimationFrame(() => youtubeInput.focus());
   }
 
   function manualTrackId(): string {
@@ -768,7 +835,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     }
 
     stopSubmissionPlayback();
-    uploadingTracks.add(track.id);
+    audioTasks.set(track.id, "upload");
     setMessage("");
     render();
     try {
@@ -789,7 +856,55 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Uploaden is mislukt.", true);
     } finally {
-      uploadingTracks.delete(track.id);
+      audioTasks.delete(track.id);
+      render();
+    }
+  }
+
+  async function importYouTubeAudio(track: Track, youtubeUrl: string) {
+    if (isSubmissionLocked() || submissionBusy()) return;
+    if (!/^https:\/\//i.test(youtubeUrl.trim())) {
+      youtubeError.textContent = "Plak een volledige https-link van YouTube.";
+      youtubeInput.focus();
+      return;
+    }
+
+    stopSubmissionPlayback();
+    audioTasks.set(track.id, "youtube");
+    youtubeSubmit.disabled = true;
+    youtubeSubmit.textContent = "Ophalen…";
+    youtubeInput.disabled = true;
+    youtubeCloseButtons.forEach((button) => button.disabled = true);
+    youtubeError.textContent = "";
+    setMessage("");
+    render();
+    try {
+      await draftSaveQueue;
+      const response = await fetch(`/api/audio/${encodeURIComponent(track.id)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ memberId, youtubeUrl: youtubeUrl.trim() }),
+      });
+      const payload = response.headers.get("Content-Type")?.includes("application/json")
+        ? await response.json() as { audio?: unknown; error?: string }
+        : {};
+      if (!response.ok || !isAudioRecord(payload.audio)) throw new Error(payload.error ?? "De YouTube-audio kon niet worden toegevoegd.");
+      audioRecords.set(track.id, payload.audio);
+      if (payload.audio.duration) {
+        state.customTracks[track.id] = { ...track, duration: Math.round(payload.audio.duration) };
+      }
+      playbackPositions.set(track.id, 0);
+      youtubeDialog.close();
+      youtubeTrackId = undefined;
+      youtubeForm.reset();
+    } catch (error) {
+      youtubeError.textContent = error instanceof Error ? error.message : "De YouTube-audio kon niet worden toegevoegd.";
+    } finally {
+      audioTasks.delete(track.id);
+      youtubeSubmit.disabled = false;
+      youtubeSubmit.textContent = "Audio ophalen";
+      youtubeInput.disabled = false;
+      youtubeCloseButtons.forEach((button) => button.disabled = false);
       render();
     }
   }
@@ -874,6 +989,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     if (selectionLocked || remaining === 0) {
       setSearchOpen(false);
       if (manualDialog.open && !addingTrack) manualDialog.close();
+      if (youtubeDialog.open && audioTasks.size === 0) youtubeDialog.close();
     }
   }
 
@@ -958,6 +1074,37 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     }
   });
 
+  youtubeDialog.addEventListener("click", (event) => {
+    if ((event.target as HTMLElement).closest("[data-close-youtube]")) closeYouTubeDialog();
+  });
+
+  youtubeDialog.addEventListener("cancel", (event) => {
+    if (audioTasks.size === 0) {
+      youtubeTrackId = undefined;
+      youtubeForm.reset();
+      youtubeError.textContent = "";
+      return;
+    }
+    event.preventDefault();
+  });
+
+  youtubeForm.addEventListener("input", () => {
+    youtubeError.textContent = "";
+  });
+
+  youtubeForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const track = youtubeTrackId ? getTrack(youtubeTrackId) : undefined;
+    if (!track || audioTasks.size > 0) return;
+    const youtubeUrl = youtubeInput.value.trim();
+    if (!youtubeUrl) {
+      youtubeError.textContent = "Plak eerst een YouTube-link.";
+      youtubeInput.focus();
+      return;
+    }
+    importYouTubeAudio(track, youtubeUrl);
+  });
+
   searchPanel.addEventListener("click", async (event) => {
     const target = event.target as HTMLElement;
     if (target.closest("[data-close-search]")) {
@@ -1022,6 +1169,11 @@ import ProgressMarks from "../components/ProgressMarks.astro";
 
     if (target.closest("[data-upload-audio]")) {
       row.querySelector<HTMLInputElement>("[data-audio-file]")?.click();
+      return;
+    }
+
+    if (target.closest("[data-youtube-audio]")) {
+      openYouTubeDialog(id);
       return;
     }
 

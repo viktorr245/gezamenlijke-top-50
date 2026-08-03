@@ -1,7 +1,7 @@
 import { open } from "node:fs/promises";
 import { Readable } from "node:stream";
 import type { APIRoute } from "astro";
-import { getAudioAsset, removeAudio, saveAudio, validateTrackId } from "../../../server/audio-storage";
+import { getAudioAsset, removeAudio, saveAudio, saveAudioFromYouTube, validateTrackId, type AudioRecord } from "../../../server/audio-storage";
 import { AuthorizationError, requireMember } from "../../../server/auth";
 import { isSameOrigin } from "../../../server/request-security";
 import { getSubmission, saveDraftSubmission } from "../../../server/submission-storage";
@@ -11,6 +11,18 @@ export const prerender = false;
 
 function errorResponse(message: string, status: number) {
   return Response.json({ error: message }, { status, headers: { "Cache-Control": "no-store" } });
+}
+
+function audioErrorStatus(error: unknown, message: string): number {
+  if (error instanceof AuthorizationError) return error.status;
+  if (message.includes("100 MB")) return 413;
+  if (message.includes("opslaglimiet") || message.includes("schijfruimte")) return 507;
+  if (message.includes("definitieve inzending")) return 409;
+  if (message.includes("jouw inzending")) return 403;
+  if (message.includes("duurde te lang")) return 504;
+  if (message.includes("niet geïnstalleerd") || message.includes("kon niet worden gestart")) return 500;
+  if (message.includes("YouTube-download") || message.includes("van YouTube worden opgehaald")) return 502;
+  return 400;
 }
 
 function requestedRange(header: string | null, size: number): { start: number; end: number } | undefined | null {
@@ -64,19 +76,30 @@ export const GET: APIRoute = async ({ params, request }) => {
 };
 
 export const POST: APIRoute = async ({ params, request }) => {
-  if (!isSameOrigin(request)) return errorResponse("Ongeldige uploadaanvraag.", 403);
+  if (!isSameOrigin(request)) return errorResponse("Ongeldige audioaanvraag.", 403);
   try {
     const trackId = validateTrackId(params.trackId);
-    const form = await request.formData();
-    const file = form.get("audio");
-    if (!(file instanceof File)) return errorResponse("Kies eerst een audiobestand.", 400);
-    const memberId = requireMember(request, form.get("memberId"));
+    const contentType = request.headers.get("Content-Type") ?? "";
+    let memberId: ReturnType<typeof requireMember>;
+    let storeAudio: (details: { title: string; artist: string }) => Promise<AudioRecord>;
+    if (contentType.toLowerCase().includes("application/json")) {
+      const body = await request.json().catch(() => undefined) as { memberId?: unknown; youtubeUrl?: unknown } | undefined;
+      if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("De YouTube-link kon niet worden gelezen.");
+      memberId = requireMember(request, body.memberId);
+      storeAudio = (details) => saveAudioFromYouTube(trackId, body.youtubeUrl, details);
+    } else {
+      const form = await request.formData();
+      const file = form.get("audio");
+      if (!(file instanceof File)) return errorResponse("Kies eerst een audiobestand.", 400);
+      memberId = requireMember(request, form.get("memberId"));
+      storeAudio = (details) => saveAudio(trackId, file, details);
+    }
     const audio = await withSubmissionAudioLock(async () => {
       const submission = await getSubmission(memberId);
       const track = submission?.tracks.find((candidate) => candidate.id === trackId);
       if (!submission || !track) throw new Error("Dit nummer staat niet in jouw inzending.");
       if (submission.finalizedAt) throw new Error("Audio van een definitieve inzending kan niet meer worden vervangen.");
-      const audio = await saveAudio(trackId, file, {
+      const audio = await storeAudio({
         title: track.title,
         artist: track.artist,
       });
@@ -91,7 +114,7 @@ export const POST: APIRoute = async ({ params, request }) => {
     return Response.json({ audio }, { status: 201, headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Uploaden is mislukt.";
-    return errorResponse(message, error instanceof AuthorizationError ? error.status : message.includes("100 MB") ? 413 : message.includes("opslaglimiet") || message.includes("schijfruimte") ? 507 : message.includes("definitieve inzending") ? 409 : message.includes("jouw inzending") ? 403 : message.includes("duurde te lang") ? 504 : message.includes("FFmpeg") || message.includes("FFprobe") ? 500 : 400);
+    return errorResponse(message, audioErrorStatus(error, message));
   }
 };
 

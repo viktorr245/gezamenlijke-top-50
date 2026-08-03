@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { members, type MemberId, type Track } from "../src/data/tracks";
@@ -578,6 +578,9 @@ test("audio bewaart het origineel en maakt een Opus-afspeelbestand", async ({}, 
   test.skip(testInfo.project.name !== "desktop-chromium");
   const directory = await mkdtemp(path.join(tmpdir(), "top50-audio-"));
   const previousStorage = process.env.STORAGE_DIR;
+  const previousYtDlp = process.env.YTDLP_PATH;
+  const previousYtSource = process.env.YTDLP_TEST_SOURCE;
+  const previousYtArgs = process.env.YTDLP_TEST_ARGS;
   process.env.STORAGE_DIR = directory;
   try {
     const storage = await import("../src/server/audio-storage");
@@ -612,12 +615,53 @@ test("audio bewaart het origineel en maakt een Opus-afspeelbestand", async ({}, 
       artist: "Testartiest",
     });
     await expect(readFile(orphan)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await storage.removeAudioBatch(["audio-test", "audio-tweede"])).toBe(2);
+
+    expect(storage.normalizeYouTubeUrl("https://youtu.be/BaW_jenozKc?si=test")).toBe("https://www.youtube.com/watch?v=BaW_jenozKc");
+    expect(storage.normalizeYouTubeUrl("https://www.youtube.com/shorts/BaW_jenozKc")).toBe("https://www.youtube.com/watch?v=BaW_jenozKc");
+    expect(() => storage.normalizeYouTubeUrl("https://youtube.com.evil.example/watch?v=BaW_jenozKc")).toThrow("YouTube");
+    const fakeYtDlp = path.join(directory, "fake-yt-dlp.mjs");
+    const ytSource = path.join(directory, "youtube-source.wav");
+    const ytArgs = path.join(directory, "youtube-args.json");
+    await writeFile(ytSource, wav);
+    await writeFile(fakeYtDlp, `#!/usr/bin/env node
+import { copyFileSync, writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+writeFileSync(process.env.YTDLP_TEST_ARGS, JSON.stringify(args));
+const template = args[args.indexOf("--output") + 1];
+copyFileSync(process.env.YTDLP_TEST_SOURCE, template.replace("%(ext)s", "wav"));
+`);
+    await chmod(fakeYtDlp, 0o755);
+    process.env.YTDLP_PATH = fakeYtDlp;
+    process.env.YTDLP_TEST_SOURCE = ytSource;
+    process.env.YTDLP_TEST_ARGS = ytArgs;
+    const youtubeRecord = await storage.saveAudioFromYouTube("audio-youtube", "https://youtu.be/BaW_jenozKc?list=verboden", {
+      title: "YouTube-test",
+      artist: "AC/DC",
+    });
+    expect(youtubeRecord.source).toBe("youtube");
+    expect(youtubeRecord.sourceUrl).toBe("https://www.youtube.com/watch?v=BaW_jenozKc");
+    expect(youtubeRecord.playbackMimeType).toBe("audio/webm");
+    expect(youtubeRecord.originalName).toMatch(/^AC-DC - YouTube-test/);
+    const youtubeOriginal = await storage.getAudioAsset("audio-youtube", true);
+    expect(youtubeOriginal?.mimeType).toBe("audio/wav");
+    expect(await readFile(youtubeOriginal!.path)).toEqual(wav);
+    const downloaderArgs = JSON.parse(await readFile(ytArgs, "utf8")) as string[];
+    expect(downloaderArgs).toContain("--no-playlist");
+    expect(downloaderArgs).toContain("--max-filesize");
+    expect(downloaderArgs.at(-1)).toBe("https://www.youtube.com/watch?v=BaW_jenozKc");
+
+    expect(await storage.removeAudioBatch(["audio-test", "audio-tweede", "audio-youtube"])).toBe(3);
     expect(await storage.removeAudioBatch([])).toBe(0);
     expect(await storage.getAudioAsset("audio-test", true)).toBeUndefined();
     expect(await storage.getAudioAsset("audio-tweede", true)).toBeUndefined();
     await expect(readFile(replacement!.path)).rejects.toMatchObject({ code: "ENOENT" });
   } finally {
+    if (previousYtDlp === undefined) delete process.env.YTDLP_PATH;
+    else process.env.YTDLP_PATH = previousYtDlp;
+    if (previousYtSource === undefined) delete process.env.YTDLP_TEST_SOURCE;
+    else process.env.YTDLP_TEST_SOURCE = previousYtSource;
+    if (previousYtArgs === undefined) delete process.env.YTDLP_TEST_ARGS;
+    else process.env.YTDLP_TEST_ARGS = previousYtArgs;
     if (previousStorage === undefined) delete process.env.STORAGE_DIR;
     else process.env.STORAGE_DIR = previousStorage;
     await rm(directory, { recursive: true, force: true });
@@ -790,6 +834,8 @@ test("na keuze 120 volgt eerst een expliciete definitieve bevestiging", async ({
 test("Mijn 20 zoekt, bewaart centraal en maakt audio duidelijk verplicht", async ({ page, isMobile }) => {
   let draft: Track[] = [];
   let audioUploads = 0;
+  let youtubeImports = 0;
+  let receivedYouTubeUrl = "";
   await page.route("**/api/submissions/viktor", async (route) => {
     if (route.request().method() === "GET") return route.fulfill({ json: { submission: null } });
     const body = route.request().postDataJSON() as { tracks: Track[] };
@@ -799,17 +845,25 @@ test("Mijn 20 zoekt, bewaart centraal en maakt audio duidelijk verplicht", async
   await page.route("**/api/audio", (route) => route.fulfill({ json: { audio: {} } }));
   const result = { ...makeTrack("viktor", 0), id: "itunes-100000", source: "itunes" as const, sourceId: "100000", previewUrl: "https://example.test/preview.m4a" };
   await page.route(`**/api/audio/${result.id}`, async (route) => {
-    audioUploads += 1;
+    const fromYouTube = route.request().headers()["content-type"]?.includes("application/json");
+    if (fromYouTube) {
+      youtubeImports += 1;
+      receivedYouTubeUrl = (route.request().postDataJSON() as { youtubeUrl: string }).youtubeUrl;
+    } else {
+      audioUploads += 1;
+    }
     await route.fulfill({ json: { audio: {
       trackId: result.id,
       title: result.title,
       artist: result.artist,
-      originalName: "gesleept-nummer.wav",
+      originalName: fromYouTube ? "Artiest - Nummer (YouTube).webm" : "gesleept-nummer.wav",
       mimeType: "audio/webm",
       size: 1234,
       duration: 180,
       uploadedAt: new Date().toISOString(),
       url: `/api/audio/${result.id}`,
+      source: fromYouTube ? "youtube" : "upload",
+      ...(fromYouTube ? { sourceUrl: receivedYouTubeUrl } : {}),
     } } });
   });
   await page.route("**/api/itunes/search?**", (route) => route.fulfill({ json: { tracks: [result] } }));
@@ -834,7 +888,8 @@ test("Mijn 20 zoekt, bewaart centraal en maakt audio duidelijk verplicht", async
   await expect(page.locator(".reorder-controls")).toHaveCount(0);
   await expect(page.locator("#save-submission")).toBeDisabled();
   if (isMobile) {
-    for (const control of [page.locator(".row-cover-button"), page.locator(".remove-track"), page.locator(".audio-upload-action")]) {
+    await page.setViewportSize({ width: 320, height: 640 });
+    for (const control of [page.locator(".row-cover-button"), page.locator(".remove-track"), page.locator(".audio-upload-action"), page.locator(".youtube-audio-action")]) {
       const box = await control.boundingBox();
       expect(box?.width).toBeGreaterThanOrEqual(44);
       expect(box?.height).toBeGreaterThanOrEqual(44);
@@ -854,6 +909,23 @@ test("Mijn 20 zoekt, bewaart centraal en maakt audio duidelijk verplicht", async
   await dropzone.dispatchEvent("drop", { dataTransfer });
   await expect(page.locator(".audio-ready-label")).toContainText("Audio toegevoegd");
   expect(audioUploads).toBe(1);
+
+  await page.locator("[data-youtube-audio]").click();
+  await expect(page.locator("#youtube-audio-dialog")).toBeVisible();
+  if (isMobile) {
+    const dialogBounds = await page.locator("#youtube-audio-dialog").evaluate((dialog) => {
+      const box = dialog.getBoundingClientRect();
+      return { left: box.left, right: box.right, viewport: document.documentElement.clientWidth };
+    });
+    expect(dialogBounds.left).toBeGreaterThanOrEqual(0);
+    expect(dialogBounds.right).toBeLessThanOrEqual(dialogBounds.viewport);
+  }
+  await expect(page.locator("#youtube-audio-track")).toContainText(result.title);
+  await page.locator("#youtube-audio-url").fill("https://youtu.be/BaW_jenozKc");
+  await page.locator("#youtube-audio-form").getByRole("button", { name: "Audio ophalen" }).click();
+  await expect(page.locator(".audio-ready-label")).toContainText("YouTube-audio toegevoegd");
+  expect(youtubeImports).toBe(1);
+  expect(receivedYouTubeUrl).toBe("https://youtu.be/BaW_jenozKc");
 });
 
 test("Mijn 20 kan na een tijdelijke laadfout opnieuw proberen", async ({ page }) => {

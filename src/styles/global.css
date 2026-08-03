@@ -1239,6 +1239,20 @@ h1 {
   font-size: 19px;
 }
 
+.youtube-audio-dialog > p strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.youtube-audio-form {
+  grid-template-columns: 1fr;
+}
+
+.youtube-audio-submit {
+  min-width: 220px;
+  min-height: 54px;
+}
+
 .manual-track-close {
   position: absolute;
   top: 20px;
@@ -1548,6 +1562,32 @@ h1 {
   border-left: 1px solid rgba(143, 16, 27, 0.72);
 }
 
+.audio-source-actions {
+  display: flex;
+  align-self: stretch;
+}
+
+.youtube-audio-action {
+  display: flex;
+  width: auto;
+  min-height: 44px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
+  border-bottom: 0;
+  white-space: nowrap;
+}
+
+.submission-audio--missing .youtube-audio-action {
+  min-height: 52px;
+  border-left: 1px solid rgba(143, 16, 27, 0.72);
+}
+
+.audio-source-actions button:hover {
+  color: var(--paper-soft);
+  background: var(--oxblood);
+}
+
 .submission-audio--checking,
 .submission-audio--uploading {
   grid-template-columns: 1fr;
@@ -1711,6 +1751,19 @@ h1 {
   min-height: 44px;
   align-items: center;
   font-size: 16px;
+}
+
+.audio-replace-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.audio-replace-actions::before {
+  color: var(--muted);
+  content: "Vervang:";
+  font-size: 13px;
+  text-transform: uppercase;
 }
 
 .submission-footer {
@@ -3378,7 +3431,7 @@ h1 {
     grid-column: 1;
   }
 
-  .audio-replace-action {
+  .audio-replace-actions {
     grid-column: 2;
     grid-row: 1;
   }
@@ -4049,6 +4102,7 @@ h1 {
   }
 
   .submission-audio--missing {
+    grid-template-columns: minmax(0, 1fr);
     min-height: 50px;
     gap: 0;
     padding: 0;
@@ -4092,6 +4146,22 @@ h1 {
     height: auto !important;
   }
 
+  .audio-source-actions {
+    width: 100%;
+    border-top: 1px solid rgba(143, 16, 27, 0.72);
+  }
+
+  .audio-source-actions > button {
+    min-height: 46px !important;
+    flex: 1;
+    justify-content: center;
+    border-left: 0 !important;
+  }
+
+  .audio-source-actions > button + button {
+    border-left: 1px solid rgba(143, 16, 27, 0.72) !important;
+  }
+
   .submission-audio--ready {
     grid-template-columns: minmax(0, 1fr) auto;
   }
@@ -4100,10 +4170,17 @@ h1 {
     grid-column: 1;
   }
 
-  .audio-replace-action {
+  .audio-replace-actions {
     grid-column: 2;
     grid-row: 1;
+  }
+
+  .audio-replace-action {
     font-size: 14px;
+  }
+
+  .audio-replace-actions::before {
+    display: none;
   }
 
   .row-audio-player {

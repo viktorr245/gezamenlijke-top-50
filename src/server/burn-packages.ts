@@ -189,7 +189,7 @@ function metadataFiles(discNumber: number, tracks: Track[], sources: Map<string,
     ...tracks.map((track, index) => `${String(index + 1).padStart(2, "0")}. ${playlistValue(track.artist)} — ${playlistValue(track.title)} (${formatDuration(Math.round(sources.get(track.id)!.duration))})`),
     "",
     "Brand als audio-cd, niet als data-cd. Gebruik CD 01.m3u8 om de bestanden in de juiste volgorde te laden.",
-    "De WAV-bestanden zijn vanuit de originele uploads omgezet naar 44,1 kHz, 16-bit stereo.",
+    "De WAV-bestanden zijn vanuit de bewaarde originele audiobronnen omgezet naar 44,1 kHz, 16-bit stereo.",
     "",
   ].join("\r\n");
   return { folder, playlist, cue, tracklist };

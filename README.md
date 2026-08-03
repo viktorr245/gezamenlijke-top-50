@@ -14,8 +14,8 @@ Kies eerst links of bovenin je eigen naam. Op **Mijn 20** kun je daarna:
 - een resultaat uit de Nederlandse iTunes Store toevoegen;
 - een nummer dat niet in iTunes staat handmatig toevoegen met titel, artiest en eventueel een album;
 - de iTunes-preview beluisteren als die beschikbaar is;
-- per nummer een volledig audiobestand kiezen of naar de kaart slepen;
-- het geüploade bestand afspelen en door de tijdlijn scrubben;
+- per nummer een volledig audiobestand kiezen, naar de kaart slepen of via een YouTube-link ophalen;
+- de toegevoegde audio afspelen en door de tijdlijn scrubben;
 - een verkeerd nummer weer verwijderen.
 
 De lijst wordt na iedere wijziging centraal op de server bewaard. Een nummer kan maar door één deelnemer worden ingediend. De knop **Inzending definitief maken** wordt pas actief bij precies twintig nummers én twintig audiobestanden. Na bevestigen kunnen de nummers niet meer worden gewijzigd.
@@ -40,7 +40,7 @@ Klik op een nummer om alle twaalf vergelijkingen te bekijken, gegroepeerd per de
 
 Daarna:
 
-1. leest de server met FFprobe de werkelijke lengte van de originele audiobestanden;
+1. leest de server met FFprobe de werkelijke lengte van de bewaarde audiobronnen;
 2. verdeelt de website de top 50 automatisch over drie cd’s, steeds met het langste resterende nummer op de op dat moment kortste cd;
 3. bewaakt de website de grens van 80 minuten per cd, inclusief twee seconden tussen opeenvolgende tracks;
 4. kan Viktor nummers naar een andere cd verplaatsen en de volgorde aanpassen;
@@ -49,7 +49,7 @@ Daarna:
 
 De andere deelnemers kunnen de indeling en downloads wel bekijken. Een definitieve indeling kan via de website niet meer worden gewijzigd.
 
-Ieder cd-pakket is een ZIP met genummerde WAV-bestanden in de vastgelegde volgorde, een UTF-8 M3U8-afspeellijst, een CUE-bestand en `Tracklijst.txt`. De WAV-bestanden zijn 44,1 kHz, 16-bit stereo en worden rechtstreeks vanuit de originele uploads gemaakt. Daarnaast is er één download met de pakketten van alle drie cd’s. De pagina toont tijdens het maken per nummer de voortgang. Als de voorbereiding mislukt, kan Viktor die opnieuw starten.
+Ieder cd-pakket is een ZIP met genummerde WAV-bestanden in de vastgelegde volgorde, een UTF-8 M3U8-afspeellijst, een CUE-bestand en `Tracklijst.txt`. De WAV-bestanden zijn 44,1 kHz, 16-bit stereo en worden rechtstreeks vanuit de bewaarde originele audiobron gemaakt. Daarnaast is er één download met de pakketten van alle drie cd’s. De pagina toont tijdens het maken per nummer de voortgang. Als de voorbereiding mislukt, kan Viktor die opnieuw starten.
 
 ## Hoe de top 50 wordt berekend
 
@@ -72,12 +72,19 @@ De vijftig nummers met de grootste top-50-kans worden gekozen. Bij een gelijke k
 
 ## Audio
 
-Ondersteunde uploads zijn MP3, M4A, WAV, OGG, WebM, AAC en FLAC, met een maximum van 100 MB per bestand.
+Audio kan op twee manieren worden toegevoegd:
 
-Bij een upload bewaart de server:
+- upload een MP3-, M4A-, WAV-, OGG-, WebM-, AAC- of FLAC-bestand of sleep het naar het nummer;
+- plak een link naar één openbare YouTube-video. De server gebruikt `yt-dlp` om de beste beschikbare audiostream op te halen. Kanalen, afspeellijsten, privévideo’s en links naar andere websites worden geweigerd.
 
-- het originele bestand, ongewijzigd;
+Voor beide routes geldt een maximum van 100 MB. Gebruik alleen een YouTube-link wanneer je de audio ook mag downloaden en gebruiken.
+
+De server bewaart vervolgens:
+
+- het oorspronkelijke uploadbestand of de beste door YouTube aangeboden audiobron;
 - een WebM/Opus-versie van 196 kbit/s voor afspelen in de browser.
+
+De cd-pakketten worden altijd vanuit de eerste, bewaarde bron gemaakt. YouTube-audio doorloopt daardoor dezelfde FFprobe-controle, 80-minutenberekening en WAV-conversie als een handmatig uploadbestand.
 
 Verwijder je een nummer uit een conceptinzending, dan verwijdert de server beide audiobestanden direct mee. Audio van een definitieve inzending kan niet via de website worden verwijderd.
 
@@ -107,6 +114,7 @@ Een handmatig toegevoegd nummer gebruikt geen Apple-verzoek. De ingevoerde gegev
 - Phosphor Icons
 - Playwright
 - FFmpeg met `libopus` en FFprobe
+- yt-dlp voor YouTube-audio
 
 De server bewaart de gegevens als atomair geschreven JSON-bestanden en audiobestanden. Dit past bij één kleine vriendengroep en één draaiend serverproces. Voor meerdere gelijktijdige server-instances hoort de opslag door een database en gedeelde object storage te worden vervangen.
 
@@ -115,7 +123,8 @@ De server bewaart de gegevens als atomair geschreven JSON-bestanden en audiobest
 Vereist:
 
 - Node.js 22 of nieuwer;
-- FFmpeg met ondersteuning voor `libopus`, inclusief FFprobe.
+- FFmpeg met ondersteuning voor `libopus`, inclusief FFprobe;
+- een recente yt-dlp-versie voor YouTube-links.
 
 ```bash
 npm install
@@ -131,11 +140,11 @@ npm run build
 npm run preview
 ```
 
-Met `FFMPEG_PATH=/pad/naar/ffmpeg` en `FFPROBE_PATH=/pad/naar/ffprobe` kun je andere installaties aanwijzen.
+Met `FFMPEG_PATH=/pad/naar/ffmpeg`, `FFPROBE_PATH=/pad/naar/ffprobe` en `YTDLP_PATH=/pad/naar/yt-dlp` kun je andere installaties aanwijzen.
 
 ### Met Docker
 
-De meegeleverde `Dockerfile` bouwt de Astro-server en bevat FFmpeg, FFprobe en een container-healthcheck. Start hem met een blijvend opslagvolume en een zelf gegenereerde `.env`:
+De meegeleverde `Dockerfile` bouwt de Astro-server en bevat FFmpeg, FFprobe, een gecontroleerde officiële yt-dlp-binary voor x86-64 of ARM64 en een container-healthcheck. Start hem met een blijvend opslagvolume en een zelf gegenereerde `.env`:
 
 ```bash
 npm run auth:generate
@@ -151,6 +160,8 @@ docker run --rm \
 ```
 
 Gebruik in productie precies één container tegelijk. De JSON-opslag en schrijfwachtrijen zijn ontworpen voor één serverproces.
+
+De Docker-build zet yt-dlp bewust vast op een officiële versie met een gecontroleerde SHA-256-checksum. YouTube verandert regelmatig; werkt ophalen later niet meer, werk dan de versie en de twee bijbehorende officiële checksums bovenin de `Dockerfile` bij en bouw de container opnieuw.
 
 ## Aanmelden en deelnemersrechten
 
@@ -222,7 +233,7 @@ Een nieuwe set van vijf definitieve inzendingen krijgt automatisch een nieuwe st
 | `GET /api/itunes/search` | gecachet zoeken bij iTunes |
 | `GET/POST /api/itunes/catalog` | vastgezette catalogus laden of een volledig Apple-record permanent vastzetten |
 | `GET /api/audio` | overzicht van beschikbare audiobestanden |
-| `GET/POST/DELETE /api/audio/:trackId` | audio afspelen, uploaden of uit een concept verwijderen |
+| `GET/POST/DELETE /api/audio/:trackId` | audio afspelen, uploaden, via YouTube ophalen of uit een concept verwijderen |
 
 Schrijvende routes weigeren verzoeken met een vreemde `Origin`.
 
@@ -242,7 +253,7 @@ De tests controleren onder meer:
 - de fase-afhankelijke doorverwijzing vanaf het startadres;
 - ondertekende sessies en het blokkeren van toegang tot een andere deelnemer;
 - de 120 voortgangsmarkeringen, stemmen, terugnemen en expliciet definitief maken;
-- zoeken, audioverplichting en het ontbreken van een betekenisloze inzendvolgorde;
+- zoeken, uploaden of YouTube-audio ophalen, audioverplichting en het ontbreken van een betekenisloze inzendvolgorde;
 - alle honderd ranglijstregels, de grens na nummer 50 en de keuzegeschiedenis per nummer;
 - automatische cd-verdeling, toegankelijke verplaatsing en definitief maken;
 - geldige streaming-ZIP’s met Unicode-bestandsnamen en de brandpakketdownloads;

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { assertStorageCapacity, STORAGE_ROOT } from "./storage-health";
 
@@ -11,7 +11,10 @@ const TRACK_ID_PATTERN = /^[a-zA-Z0-9_-]{1,100}$/;
 const FFMPEG_PATH = process.env.FFMPEG_PATH ?? "ffmpeg";
 const FFPROBE_PATH = process.env.FFPROBE_PATH ?? "ffprobe";
 const FFMPEG_TIMEOUT_MS = 15 * 60 * 1000;
+const YT_DLP_TIMEOUT_MS = 15 * 60 * 1000;
 const GENERATED_AUDIO_PATTERN = /^[a-zA-Z0-9_-]{1,100}-[a-f0-9]{32}(?:-o)?\.[a-z0-9]{2,5}$/;
+const TEMPORARY_AUDIO_PATTERN = /^\.[a-zA-Z0-9_-]{1,100}-[a-f0-9-]{36}-(?:original|playback)\.tmp$/;
+const WORKING_AUDIO_PATTERN = /^\.audio-work-[a-f0-9-]{36}$/;
 
 const AUDIO_TYPES: Record<string, string> = {
   "audio/aac": "aac",
@@ -23,6 +26,17 @@ const AUDIO_TYPES: Record<string, string> = {
   "audio/webm": "webm",
   "audio/x-m4a": "m4a",
   "audio/x-wav": "wav",
+};
+
+const EXTENSION_TYPES: Record<string, string> = {
+  aac: "audio/aac",
+  flac: "audio/flac",
+  m4a: "audio/mp4",
+  mp3: "audio/mpeg",
+  ogg: "audio/ogg",
+  opus: "audio/ogg",
+  wav: "audio/wav",
+  webm: "audio/webm",
 };
 
 type StoredAudioRecord = {
@@ -38,6 +52,8 @@ type StoredAudioRecord = {
   playbackSize: number;
   duration?: number;
   uploadedAt: string;
+  source?: "upload" | "youtube";
+  sourceUrl?: string;
 };
 
 export type AudioRecord = Omit<StoredAudioRecord, "originalStoredName" | "playbackStoredName"> & {
@@ -78,7 +94,9 @@ function isStoredRecord(value: unknown): value is StoredAudioRecord {
     && typeof record.playbackSize === "number"
     && Number.isFinite(record.playbackSize)
     && (record.duration === undefined || (typeof record.duration === "number" && Number.isFinite(record.duration) && record.duration > 0))
-    && typeof record.uploadedAt === "string",
+    && typeof record.uploadedAt === "string"
+    && (record.source === undefined || record.source === "upload" || record.source === "youtube")
+    && (record.sourceUrl === undefined || typeof record.sourceUrl === "string"),
   );
 }
 
@@ -131,10 +149,19 @@ async function cleanupOrphanedAudioFiles(index: Record<string, StoredAudioRecord
   await ensureStorage();
   const referenced = new Set(Object.values(index).flatMap((record) => [record.originalStoredName, record.playbackStoredName]));
   const entries = await readdir(AUDIO_DIRECTORY, { withFileTypes: true });
-  const orphans = entries
-    .filter((entry) => entry.isFile() && GENERATED_AUDIO_PATTERN.test(entry.name) && !referenced.has(entry.name))
+  const orphanedFiles = entries
+    .filter((entry) => entry.isFile() && (
+      TEMPORARY_AUDIO_PATTERN.test(entry.name)
+      || (GENERATED_AUDIO_PATTERN.test(entry.name) && !referenced.has(entry.name))
+    ))
     .map((entry) => path.join(AUDIO_DIRECTORY, entry.name));
-  const cleanup = await Promise.allSettled(orphans.map(removeFile));
+  const orphanedDirectories = entries
+    .filter((entry) => entry.isDirectory() && WORKING_AUDIO_PATTERN.test(entry.name))
+    .map((entry) => path.join(AUDIO_DIRECTORY, entry.name));
+  const cleanup = await Promise.allSettled([
+    ...orphanedFiles.map(removeFile),
+    ...orphanedDirectories.map((directory) => rm(directory, { recursive: true, force: true })),
+  ]);
   if (cleanup.some((result) => result.status === "rejected")) {
     console.error("Een of meer achtergebleven audiobestanden konden niet worden opgeruimd.");
   }
@@ -214,6 +241,205 @@ async function probeAudioDuration(inputPath: string): Promise<number> {
   });
 }
 
+function videoIdFromYouTubeUrl(value: unknown): string {
+  if (typeof value !== "string" || value.trim().length === 0 || value.length > 2_048) {
+    throw new Error("Plak een geldige YouTube-link.");
+  }
+
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new Error("Plak een geldige YouTube-link.");
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.port) {
+    throw new Error("Gebruik een volledige https-link van YouTube.");
+  }
+
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  let videoId: string | null = null;
+  if (host === "youtu.be") {
+    videoId = url.pathname.split("/").filter(Boolean)[0] ?? null;
+  } else if (["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"].includes(host)) {
+    if (url.pathname === "/watch") videoId = url.searchParams.get("v");
+    else videoId = /^\/(?:shorts|live|embed)\/([^/]+)\/?$/.exec(url.pathname)?.[1] ?? null;
+  }
+  if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+    throw new Error("Gebruik een link naar één YouTube-video, niet naar een kanaal of afspeellijst.");
+  }
+  return videoId;
+}
+
+export function normalizeYouTubeUrl(value: unknown): string {
+  return `https://www.youtube.com/watch?v=${videoIdFromYouTubeUrl(value)}`;
+}
+
+function runYtDlp(url: string, outputTemplate: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.env.YTDLP_PATH ?? "yt-dlp", [
+      "--no-config",
+      "--no-plugin-dirs",
+      "--no-update",
+      "--no-playlist",
+      "--no-progress",
+      "--no-cache-dir",
+      "--no-part",
+      "--socket-timeout", "20",
+      "--retries", "3",
+      "--fragment-retries", "3",
+      "--max-filesize", "100M",
+      "--no-js-runtimes",
+      "--js-runtimes", "node",
+      "--use-extractors", "youtube",
+      "--format", "bestaudio[filesize<=100M]/bestaudio[filesize_approx<=100M]/bestaudio",
+      "--output", outputTemplate,
+      url,
+    ], { stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      if (stderr.length < 8_000) stderr += chunk;
+    });
+    let settled = false;
+    let timedOut = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (error) reject(error);
+      else resolve();
+    };
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, YT_DLP_TIMEOUT_MS);
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      finish(new Error(error.code === "ENOENT" ? "yt-dlp is niet geïnstalleerd op de server." : "De YouTube-download kon niet worden gestart."));
+    });
+    child.once("close", (code) => {
+      if (timedOut) return finish(new Error("De YouTube-download duurde te lang en is gestopt."));
+      if (code === 0) return finish();
+      const normalizedError = stderr.toLocaleLowerCase("en-US");
+      if (normalizedError.includes("larger than max-filesize") || normalizedError.includes("max-filesize")) {
+        return finish(new Error("De YouTube-audio is groter dan 100 MB."));
+      }
+      if (normalizedError.includes("video unavailable") || normalizedError.includes("private video") || normalizedError.includes("sign in")) {
+        return finish(new Error("Deze YouTube-video is niet openbaar beschikbaar."));
+      }
+      finish(new Error("De audio kon niet van YouTube worden opgehaald. Controleer de link en probeer het opnieuw."));
+    });
+  });
+}
+
+type PreparedAudioSource = {
+  path: string;
+  extension: string;
+  mimeType: string;
+  originalName: string;
+  source: "upload" | "youtube";
+  sourceUrl?: string;
+};
+
+function safeOriginalName(value: string, fallback: string): string {
+  const name = path.basename(value.replaceAll("\\", "/")).replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  return (name || fallback).slice(0, 200);
+}
+
+function safeGeneratedOriginalName(value: string, fallback: string): string {
+  const name = value.replace(/[<>:"/\\|?*\u0000-\u001f\u007f]/g, "-").replace(/\s+/g, " ").trim();
+  return (name || fallback).slice(0, 200);
+}
+
+async function savePreparedAudio(
+  trackId: string,
+  details: { title: string; artist: string },
+  reservedBytes: number,
+  prepare: (workingDirectory: string) => Promise<PreparedAudioSource>,
+): Promise<AudioRecord> {
+  validateTrackId(trackId);
+  const title = details.title.trim().slice(0, 200);
+  const artist = details.artist.trim().slice(0, 200);
+  if (!title || !artist) throw new Error("Titel en artiest ontbreken.");
+
+  return enqueue(async () => {
+    await assertStorageCapacity(reservedBytes);
+    await ensureStorage();
+    const index = await readIndex();
+    await cleanupOrphanedAudioFiles(index);
+    const previous = index[trackId];
+    const uploadId = randomUUID();
+    const uploadKey = uploadId.replaceAll("-", "");
+    const workingDirectory = path.join(AUDIO_DIRECTORY, `.audio-work-${uploadId}`);
+    const temporaryOriginal = path.join(AUDIO_DIRECTORY, `.${trackId}-${uploadId}-original.tmp`);
+    const temporaryPlayback = path.join(AUDIO_DIRECTORY, `.${trackId}-${uploadId}-playback.tmp`);
+    let finalOriginal = "";
+    let finalPlayback = "";
+    let committed = false;
+
+    await mkdir(workingDirectory, { recursive: false });
+    try {
+      const source = await prepare(workingDirectory);
+      const sourceStat = await stat(source.path);
+      if (!sourceStat.isFile() || sourceStat.size <= 0) throw new Error("Het audiobestand is leeg.");
+      if (sourceStat.size > MAX_AUDIO_BYTES) throw new Error("Het audiobestand mag maximaal 100 MB zijn.");
+      if (!EXTENSION_TYPES[source.extension] || !AUDIO_TYPES[source.mimeType]) {
+        throw new Error("De gevonden audio heeft geen ondersteund bestandsformaat.");
+      }
+
+      const originalStoredName = `${trackId}-${uploadKey}-o.${source.extension}`;
+      const playbackStoredName = `${trackId}-${uploadKey}.webm`;
+      finalOriginal = path.join(AUDIO_DIRECTORY, originalStoredName);
+      finalPlayback = path.join(AUDIO_DIRECTORY, playbackStoredName);
+      await rename(source.path, temporaryOriginal);
+      const duration = await probeAudioDuration(temporaryOriginal);
+      const expectedPlaybackSize = Math.ceil(duration * 196_000 / 8 * 1.25);
+      await assertStorageCapacity(expectedPlaybackSize);
+      await transcodeToOpus(temporaryOriginal, temporaryPlayback);
+      await rename(temporaryOriginal, finalOriginal);
+      await rename(temporaryPlayback, finalPlayback);
+      const playbackStat = await stat(finalPlayback);
+
+      const record: StoredAudioRecord = {
+        trackId,
+        title,
+        artist,
+        originalName: source.originalName,
+        originalStoredName,
+        originalMimeType: source.mimeType,
+        originalSize: sourceStat.size,
+        playbackStoredName,
+        playbackMimeType: "audio/webm",
+        playbackSize: playbackStat.size,
+        duration,
+        uploadedAt: new Date().toISOString(),
+        source: source.source,
+        ...(source.sourceUrl ? { sourceUrl: source.sourceUrl } : {}),
+      };
+      index[trackId] = record;
+      await writeIndex(index);
+      committed = true;
+      if (previous) {
+        const oldNames = [previous.originalStoredName, previous.playbackStoredName]
+          .filter((name) => name !== originalStoredName && name !== playbackStoredName);
+        const cleanup = await Promise.allSettled(oldNames.map((name) => removeFile(path.join(AUDIO_DIRECTORY, name))));
+        if (cleanup.some((result) => result.status === "rejected")) {
+          console.error("Een oud audiobestand kon na een geslaagde vervanging niet worden opgeruimd.");
+        }
+      }
+      return publicRecord(record);
+    } finally {
+      await Promise.all([
+        rm(workingDirectory, { recursive: true, force: true }),
+        removeFile(temporaryOriginal),
+        removeFile(temporaryPlayback),
+      ]);
+      if (!committed) {
+        await Promise.all([finalOriginal, finalPlayback].filter(Boolean).map(removeFile));
+      }
+    }
+  });
+}
+
 export function validateTrackId(trackId: string | undefined): string {
   if (!trackId || !TRACK_ID_PATTERN.test(trackId)) throw new Error("Ongeldig nummer-id.");
   return trackId;
@@ -268,76 +494,46 @@ export async function saveAudio(
   file: File,
   details: { title: string; artist: string },
 ): Promise<AudioRecord> {
-  validateTrackId(trackId);
   validateAudioFile(file);
-  const title = details.title.trim().slice(0, 200);
-  const artist = details.artist.trim().slice(0, 200);
-  if (!title || !artist) throw new Error("Titel en artiest ontbreken.");
   const extension = AUDIO_TYPES[file.type];
+  return savePreparedAudio(trackId, details, file.size, async (workingDirectory) => {
+    const sourcePath = path.join(workingDirectory, `upload.${extension}`);
+    await writeFile(sourcePath, new Uint8Array(await file.arrayBuffer()));
+    return {
+      path: sourcePath,
+      extension,
+      mimeType: file.type,
+      originalName: safeOriginalName(file.name, `audio.${extension}`),
+      source: "upload",
+    };
+  });
+}
 
-  return enqueue(async () => {
-    // Tijdens conversie staan origineel en browserversie tijdelijk naast een
-    // eventuele oude upload. Controleer eerst of het bronbestand zelf past.
-    await assertStorageCapacity(file.size);
-    // Maak de extra kopie pas binnen de queue, zodat gelijktijdige uploads niet
-    // allemaal tegelijk maximaal 100 MB extra werkgeheugen vasthouden.
-    const buffer = new Uint8Array(await file.arrayBuffer());
-    await ensureStorage();
-    const index = await readIndex();
-    await cleanupOrphanedAudioFiles(index);
-    const previous = index[trackId];
-    const uploadId = randomUUID();
-    const uploadKey = uploadId.replaceAll("-", "");
-    const originalStoredName = `${trackId}-${uploadKey}-o.${extension}`;
-    const playbackStoredName = `${trackId}-${uploadKey}.webm`;
-    const temporaryOriginal = path.join(AUDIO_DIRECTORY, `.${trackId}-${uploadId}-original.tmp`);
-    const temporaryPlayback = path.join(AUDIO_DIRECTORY, `.${trackId}-${uploadId}-playback.tmp`);
-    const finalOriginal = path.join(AUDIO_DIRECTORY, originalStoredName);
-    const finalPlayback = path.join(AUDIO_DIRECTORY, playbackStoredName);
-    let committed = false;
-
-    try {
-      await writeFile(temporaryOriginal, buffer);
-      const duration = await probeAudioDuration(temporaryOriginal);
-      // Een Opus-bestand op 196 kbit/s kan groter worden dan een sterk
-      // gecomprimeerd bronbestand. Reserveer daarom op basis van speelduur.
-      const expectedPlaybackSize = Math.ceil(duration * 196_000 / 8 * 1.25);
-      await assertStorageCapacity(expectedPlaybackSize);
-      await transcodeToOpus(temporaryOriginal, temporaryPlayback);
-      await rename(temporaryOriginal, finalOriginal);
-      await rename(temporaryPlayback, finalPlayback);
-      const playbackStat = await stat(finalPlayback);
-
-      const record: StoredAudioRecord = {
-        trackId,
-        title,
-        artist,
-        originalName: path.basename(file.name).slice(0, 200) || `audio.${extension}`,
-        originalStoredName,
-        originalMimeType: file.type,
-        originalSize: file.size,
-        playbackStoredName,
-        playbackMimeType: "audio/webm",
-        playbackSize: playbackStat.size,
-        duration,
-        uploadedAt: new Date().toISOString(),
-      };
-      index[trackId] = record;
-      await writeIndex(index);
-      committed = true;
-      if (previous) {
-        const oldNames = [previous.originalStoredName, previous.playbackStoredName]
-          .filter((name) => name !== originalStoredName && name !== playbackStoredName);
-        const cleanup = await Promise.allSettled(oldNames.map((name) => removeFile(path.join(AUDIO_DIRECTORY, name))));
-        if (cleanup.some((result) => result.status === "rejected")) {
-          console.error("Een oud audiobestand kon na een geslaagde vervanging niet worden opgeruimd.");
-        }
-      }
-      return publicRecord(record);
-    } finally {
-      await Promise.all([removeFile(temporaryOriginal), removeFile(temporaryPlayback)]);
-      if (!committed) await Promise.all([removeFile(finalOriginal), removeFile(finalPlayback)]);
-    }
+export async function saveAudioFromYouTube(
+  trackId: string,
+  youtubeUrl: unknown,
+  details: { title: string; artist: string },
+): Promise<AudioRecord> {
+  const sourceUrl = normalizeYouTubeUrl(youtubeUrl);
+  return savePreparedAudio(trackId, details, MAX_AUDIO_BYTES, async (workingDirectory) => {
+    await runYtDlp(sourceUrl, path.join(workingDirectory, "source.%(ext)s"));
+    const entries = (await readdir(workingDirectory, { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && entry.name.startsWith("source."));
+    if (entries.length !== 1) throw new Error("De YouTube-download leverde geen bruikbaar audiobestand op.");
+    const sourcePath = path.join(workingDirectory, entries[0].name);
+    const extension = path.extname(entries[0].name).slice(1).toLowerCase();
+    const mimeType = EXTENSION_TYPES[extension];
+    if (!mimeType) throw new Error("De gevonden YouTube-audio heeft geen ondersteund bestandsformaat.");
+    const videoId = videoIdFromYouTubeUrl(sourceUrl);
+    const originalName = safeGeneratedOriginalName(`${details.artist} - ${details.title} (YouTube ${videoId}).${extension}`, `youtube-audio.${extension}`);
+    return {
+      path: sourcePath,
+      extension,
+      mimeType,
+      originalName,
+      source: "youtube",
+      sourceUrl,
+    };
   });
 }
 
