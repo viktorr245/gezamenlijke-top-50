@@ -47,7 +47,7 @@ async function directorySize(directory: string): Promise<number> {
   return sizes.reduce((sum, size) => sum + size, 0);
 }
 
-async function latestFileTime(directory: string): Promise<number | null> {
+async function latestBackupTime(directory: string): Promise<number | null> {
   let entries;
   try {
     entries = await readdir(directory, { withFileTypes: true });
@@ -55,32 +55,36 @@ async function latestFileTime(directory: string): Promise<number | null> {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
-  const values = await Promise.all(entries.map(async (entry) => {
-    const entryPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) return latestFileTime(entryPath);
-    if (!entry.isFile()) return null;
-    return (await stat(entryPath)).mtimeMs;
-  }));
-  const timestamps = values.filter((value): value is number => value !== null);
+  const backupFiles = entries.filter((entry) => (
+    entry.isFile()
+    && entry.name.startsWith("gezamenlijke_top_50_")
+    && entry.name.endsWith(".tar")
+  ));
+  const timestamps = await Promise.all(backupFiles.map(async (entry) => (
+    await stat(path.join(directory, entry.name))
+  ).mtimeMs));
   return timestamps.length ? Math.max(...timestamps) : null;
 }
 
-export async function getStorageHealth(storageRoot = STORAGE_ROOT, backupRoot = storageRoot === STORAGE_ROOT ? BACKUP_ROOT : path.join(storageRoot, "backups")): Promise<StorageHealth> {
+async function getCapacity(storageRoot: string) {
   await mkdir(storageRoot, { recursive: true });
-  const [usedBytes, fileSystem, lastBackup] = await Promise.all([
+  const [usedBytes, fileSystem] = await Promise.all([
     directorySize(storageRoot),
     statfs(storageRoot),
-    latestFileTime(backupRoot),
   ]);
   const availableBytes = Number(fileSystem.bavail) * Number(fileSystem.bsize);
   const quota = quotaBytes();
   const remainingBytes = Math.max(0, Math.min(availableBytes, quota === null ? availableBytes : quota - usedBytes));
+  return { usedBytes, availableBytes, quotaBytes: quota, remainingBytes, minimumFreeBytes: minimumFreeBytes() };
+}
+
+export async function getStorageHealth(storageRoot = STORAGE_ROOT, backupRoot = storageRoot === STORAGE_ROOT ? BACKUP_ROOT : path.join(storageRoot, "backups")): Promise<StorageHealth> {
+  const [capacity, lastBackup] = await Promise.all([
+    getCapacity(storageRoot),
+    latestBackupTime(backupRoot),
+  ]);
   return {
-    usedBytes,
-    availableBytes,
-    quotaBytes: quota,
-    remainingBytes,
-    minimumFreeBytes: minimumFreeBytes(),
+    ...capacity,
     backupDirectory: backupRoot,
     lastBackupAt: lastBackup === null ? null : new Date(lastBackup).toISOString(),
   };
@@ -88,7 +92,7 @@ export async function getStorageHealth(storageRoot = STORAGE_ROOT, backupRoot = 
 
 export async function assertStorageCapacity(additionalBytes: number, storageRoot = STORAGE_ROOT): Promise<void> {
   if (!Number.isFinite(additionalBytes) || additionalBytes < 0) throw new Error("Ongeldige opslagberekening.");
-  const health = await getStorageHealth(storageRoot);
+  const health = await getCapacity(storageRoot);
   if (health.quotaBytes !== null && health.usedBytes + additionalBytes > health.quotaBytes) {
     throw new Error("De ingestelde opslaglimiet is bereikt. Maak eerst ruimte vrij of verhoog STORAGE_QUOTA_GB.");
   }

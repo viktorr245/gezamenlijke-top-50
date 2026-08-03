@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { members, type MemberId, type Track } from "../src/data/tracks";
@@ -242,13 +242,30 @@ test("opslagstatus meet bestanden, vrije ruimte en de nieuwste back-up", async (
   try {
     await mkdir(backupDirectory);
     await writeFile(path.join(directory, "gegevens.bin"), Buffer.alloc(1024));
-    await writeFile(path.join(backupDirectory, "backup.json"), "{}\n");
+    const backupPath = path.join(backupDirectory, "gezamenlijke_top_50_20260803-120000.tar");
+    const backupTime = new Date("2026-08-03T12:00:00.000Z");
+    await writeFile(backupPath, "backup\n");
+    await utimes(backupPath, backupTime, backupTime);
+    await mkdir(path.join(backupDirectory, ".zfs", "shares"), { recursive: true });
+    await writeFile(path.join(backupDirectory, ".zfs", "shares", "intern"), "geen back-up\n");
     const { getStorageHealth } = await import("../src/server/storage-health");
     const health = await getStorageHealth(directory, backupDirectory);
     expect(health.usedBytes).toBeGreaterThanOrEqual(1027);
     expect(health.availableBytes).toBeGreaterThan(0);
     expect(health.remainingBytes).toBeGreaterThan(0);
-    expect(health.lastBackupAt).not.toBeNull();
+    expect(health.lastBackupAt).toBe(backupTime.toISOString());
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("opslagcapaciteit is niet afhankelijk van de back-upmount", async ({}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  const directory = await mkdtemp(path.join(tmpdir(), "top50-storage-capacity-"));
+  try {
+    await writeFile(path.join(directory, "backups"), "onleesbare back-upmount\n");
+    const { assertStorageCapacity } = await import("../src/server/storage-health");
+    await expect(assertStorageCapacity(1024, directory)).resolves.toBeUndefined();
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
