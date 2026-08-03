@@ -15,7 +15,7 @@ export type Track = {
   duration: number;
   cover: string;
   previewUrl?: string;
-  source?: "itunes";
+  source?: "itunes" | "manual";
   sourceId?: string;
   sourceUrl?: string;
   // Oude gecachte records kunnen deze velden nog bevatten. De nieuwe

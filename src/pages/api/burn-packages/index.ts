@@ -1,4 +1,5 @@
 import type { APIRoute } from "astro";
+import { AuthorizationError, requireOrganizer } from "../../../server/auth";
 import { ensureBurnPackages, loadFinalBurnContext, retryBurnPackages } from "../../../server/burn-packages";
 
 export const prerender = false;
@@ -28,10 +29,10 @@ export const POST: APIRoute = async ({ request }) => {
   if (!sameOrigin(request)) return errorResponse("Ongeldige aanvraag.", 403);
   try {
     const body = await request.json().catch(() => ({})) as { memberId?: unknown };
-    if (body.memberId !== "viktor") return errorResponse("Alleen Viktor kan de brandpakketten opnieuw laten maken.", 403);
+    requireOrganizer(request, body.memberId);
     const { layout, tracks } = await loadFinalBurnContext();
     return Response.json({ packages: await retryBurnPackages(layout, tracks) }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    return errorResponse(error);
+    return errorResponse(error, error instanceof AuthorizationError ? error.status : 400);
   }
 };

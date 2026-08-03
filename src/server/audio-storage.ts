@@ -2,13 +2,14 @@ import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { assertStorageCapacity, STORAGE_ROOT } from "./storage-health";
 
 const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
-const STORAGE_ROOT = path.resolve(process.env.STORAGE_DIR ?? process.env.AUDIO_STORAGE_DIR ?? path.join(process.cwd(), "storage"));
 const AUDIO_DIRECTORY = path.join(STORAGE_ROOT, "audio");
 const INDEX_PATH = path.join(STORAGE_ROOT, "audio-index.json");
 const TRACK_ID_PATTERN = /^[a-zA-Z0-9_-]{1,100}$/;
 const FFMPEG_PATH = process.env.FFMPEG_PATH ?? "ffmpeg";
+const FFPROBE_PATH = process.env.FFPROBE_PATH ?? "ffprobe";
 const FFMPEG_TIMEOUT_MS = 15 * 60 * 1000;
 
 const AUDIO_TYPES: Record<string, string> = {
@@ -34,6 +35,7 @@ type StoredAudioRecord = {
   playbackStoredName: string;
   playbackMimeType: "audio/webm";
   playbackSize: number;
+  duration?: number;
   uploadedAt: string;
 };
 
@@ -74,6 +76,7 @@ function isStoredRecord(value: unknown): value is StoredAudioRecord {
     && record.playbackMimeType === "audio/webm"
     && typeof record.playbackSize === "number"
     && Number.isFinite(record.playbackSize)
+    && (record.duration === undefined || (typeof record.duration === "number" && Number.isFinite(record.duration) && record.duration > 0))
     && typeof record.uploadedAt === "string",
   );
 }
@@ -165,6 +168,38 @@ async function transcodeToOpus(inputPath: string, outputPath: string) {
   });
 }
 
+async function probeAudioDuration(inputPath: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const process = spawn(FFPROBE_PATH, [
+      "-v", "error",
+      "-show_entries", "format=duration",
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      inputPath,
+    ], { stdio: ["ignore", "pipe", "ignore"] });
+    let stdout = "";
+    process.stdout.setEncoding("utf8");
+    process.stdout.on("data", (chunk: string) => {
+      if (stdout.length < 1000) stdout += chunk;
+    });
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      process.kill("SIGKILL");
+    }, FFMPEG_TIMEOUT_MS);
+    process.once("error", (error: NodeJS.ErrnoException) => {
+      clearTimeout(timeout);
+      reject(new Error(error.code === "ENOENT" ? "FFprobe is niet geïnstalleerd op de server." : "De speelduur kon niet worden gelezen."));
+    });
+    process.once("close", (code) => {
+      clearTimeout(timeout);
+      if (timedOut) return reject(new Error("Het uitlezen van de speelduur duurde te lang en is gestopt."));
+      const duration = Number(stdout.trim());
+      if (code === 0 && Number.isFinite(duration) && duration > 0) resolve(duration);
+      else reject(new Error("Het audiobestand heeft geen geldige speelduur."));
+    });
+  });
+}
+
 export function validateTrackId(trackId: string | undefined): string {
   if (!trackId || !TRACK_ID_PATTERN.test(trackId)) throw new Error("Ongeldig nummer-id.");
   return trackId;
@@ -228,6 +263,9 @@ export async function saveAudio(
   const buffer = new Uint8Array(await file.arrayBuffer());
 
   return enqueue(async () => {
+    // Tijdens conversie staan origineel en browserversie tijdelijk naast een
+    // eventuele oude upload. Reserveer daarom iets meer dan alleen het bronbestand.
+    await assertStorageCapacity(file.size + Math.ceil(file.size * 0.35));
     await ensureStorage();
     const index = await readIndex();
     const previous = index[trackId];
@@ -243,6 +281,7 @@ export async function saveAudio(
 
     try {
       await writeFile(temporaryOriginal, buffer);
+      const duration = await probeAudioDuration(temporaryOriginal);
       await transcodeToOpus(temporaryOriginal, temporaryPlayback);
       await rename(temporaryOriginal, finalOriginal);
       await rename(temporaryPlayback, finalPlayback);
@@ -259,6 +298,7 @@ export async function saveAudio(
         playbackStoredName,
         playbackMimeType: "audio/webm",
         playbackSize: playbackStat.size,
+        duration,
         uploadedAt: new Date().toISOString(),
       };
       index[trackId] = record;

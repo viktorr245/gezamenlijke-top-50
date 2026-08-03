@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
 import { listAudioRecords, removeAudio } from "../../../server/audio-storage";
+import { AuthorizationError, requireMember } from "../../../server/auth";
 import { finalizeSubmission, getSubmission, saveDraftSubmission } from "../../../server/submission-storage";
 import { withSubmissionAudioLock } from "../../../server/submission-audio-lock";
 
@@ -10,14 +11,15 @@ function sameOrigin(request: Request): boolean {
   return !origin || origin === new URL(request.url).origin;
 }
 
-export const GET: APIRoute = async ({ params }) => {
+export const GET: APIRoute = async ({ params, request }) => {
   try {
-    const submission = await getSubmission(params.memberId ?? "");
+    const memberId = requireMember(request, params.memberId);
+    const submission = await getSubmission(memberId);
     return Response.json({ submission: submission ?? null }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return Response.json(
       { error: error instanceof Error ? error.message : "De inzending kon niet worden geladen." },
-      { status: 400, headers: { "Cache-Control": "no-store" } },
+      { status: error instanceof AuthorizationError ? error.status : 400, headers: { "Cache-Control": "no-store" } },
     );
   }
 };
@@ -26,7 +28,7 @@ export const PUT: APIRoute = async ({ params, request }) => {
   if (!sameOrigin(request)) return Response.json({ error: "Ongeldige inzendingsaanvraag." }, { status: 403 });
   try {
     const body = await request.json() as { tracks?: unknown };
-    const memberId = params.memberId ?? "";
+    const memberId = requireMember(request, params.memberId);
     const submission = await withSubmissionAudioLock(async () => {
       const previous = await getSubmission(memberId);
       const saved = await saveDraftSubmission(memberId, Array.isArray(body.tracks) ? body.tracks : []);
@@ -39,13 +41,14 @@ export const PUT: APIRoute = async ({ params, request }) => {
     return Response.json({ submission }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "De inzending kon niet worden opgeslagen.";
-    return Response.json({ error: message }, { status: message.includes("al definitief") ? 409 : 400, headers: { "Cache-Control": "no-store" } });
+    return Response.json({ error: message }, { status: error instanceof AuthorizationError ? error.status : message.includes("al definitief") ? 409 : 400, headers: { "Cache-Control": "no-store" } });
   }
 };
 
 export const POST: APIRoute = async ({ params, request }) => {
   if (!sameOrigin(request)) return Response.json({ error: "Ongeldige inzendingsaanvraag." }, { status: 403 });
   try {
+    const memberId = requireMember(request, params.memberId);
     const body = await request.json() as { tracks?: unknown };
     const tracks = Array.isArray(body.tracks) ? body.tracks : [];
     const submission = await withSubmissionAudioLock(async () => {
@@ -54,14 +57,14 @@ export const POST: APIRoute = async ({ params, request }) => {
         .filter((track): track is { id: string } => Boolean(track && typeof track === "object" && typeof (track as { id?: unknown }).id === "string"))
         .filter((track) => !audio[track.id]);
       if (missingAudio.length > 0) throw new Error(`Voeg eerst audio toe aan alle twintig nummers. Er ontbreken er nog ${missingAudio.length}.`);
-      return finalizeSubmission(params.memberId ?? "", tracks);
+      return finalizeSubmission(memberId, tracks);
     });
     return Response.json({ submission }, { status: 201, headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "De inzending kon niet definitief worden gemaakt.";
     return Response.json(
       { error: message },
-      { status: message.includes("al definitief") ? 409 : 400, headers: { "Cache-Control": "no-store" } },
+      { status: error instanceof AuthorizationError ? error.status : message.includes("al definitief") ? 409 : 400, headers: { "Cache-Control": "no-store" } },
     );
   }
 };

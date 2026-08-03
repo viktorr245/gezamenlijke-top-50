@@ -1,9 +1,11 @@
 import { expect, test } from "@playwright/test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { members, type MemberId, type Track } from "../src/data/tracks";
+import { authenticatedMember, requireMember, sessionCookie, verifyPin } from "../src/server/auth";
 import { finalizeDiscLayout, getDiscLayout, saveDiscLayout } from "../src/server/disc-layout-storage";
+import { startPathForPhase } from "../src/server/group-state";
 import { listPinnedITunesTracks, pinITunesTrack, searchITunes } from "../src/server/itunes-cache";
 import { calculateRanking } from "../src/server/ranking";
 import { finalizeSubmission, getSubmission, listSubmissions, saveDraftSubmission, type SubmissionIndex } from "../src/server/submission-storage";
@@ -113,6 +115,66 @@ test.beforeEach(async ({ page }) => {
     if (!localStorage.getItem("gezamenlijke-top-50-member")) localStorage.setItem("gezamenlijke-top-50-member", "viktor");
   });
   await page.route("**/api/status", (route) => route.fulfill({ json: { status: groupStatus() } }));
+  await page.route("**/api/storage-status?**", (route) => route.fulfill({ json: { storage: {
+    usedBytes: 1024 ** 3,
+    availableBytes: 10 * 1024 ** 3,
+    quotaBytes: 25 * 1024 ** 3,
+    remainingBytes: 10 * 1024 ** 3,
+    minimumFreeBytes: 512 * 1024 ** 2,
+    lastBackupAt: null,
+  } } }));
+});
+
+test("de startpagina verwijst naar de pagina van de actuele fase", async ({}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  expect(startPathForPhase("inzenden")).toBe("/mijn-20");
+  expect(startPathForPhase("stemmen")).toBe("/stemmen");
+  expect(startPathForPhase("ranglijst")).toBe("/ranglijst");
+});
+
+test("pincode-login maakt een ondertekende sessie en schermt andere deelnemers af", async ({}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  const previousPins = process.env.MEMBER_PINS;
+  const previousSecret = process.env.AUTH_SECRET;
+  process.env.MEMBER_PINS = JSON.stringify({ viktor: "1111", daniel: "2222", keano: "3333", sander: "4444", jurjan: "5555" });
+  process.env.AUTH_SECRET = "een-testgeheim-dat-langer-is-dan-tweeendertig-tekens";
+  try {
+    expect(verifyPin("daniel", "2222")).toBe("daniel");
+    expect(() => verifyPin("daniel", "9999")).toThrow(/Controleer/);
+    const loginRequest = new Request("https://voorbeeld.test/api/auth/login");
+    const cookie = sessionCookie("daniel", loginRequest).split(";")[0];
+    expect(cookie).toContain("gezamenlijke_top_50_session=");
+    const signedRequest = new Request("https://voorbeeld.test/api/submissions/daniel", { headers: { Cookie: cookie } });
+    expect(authenticatedMember(signedRequest)).toBe("daniel");
+    expect(requireMember(signedRequest, "daniel")).toBe("daniel");
+    expect(() => requireMember(signedRequest, "viktor")).toThrow(/alleen je eigen/);
+    const tampered = new Request("https://voorbeeld.test/", { headers: { Cookie: `${cookie}x` } });
+    expect(authenticatedMember(tampered)).toBeUndefined();
+  } finally {
+    if (previousPins === undefined) delete process.env.MEMBER_PINS;
+    else process.env.MEMBER_PINS = previousPins;
+    if (previousSecret === undefined) delete process.env.AUTH_SECRET;
+    else process.env.AUTH_SECRET = previousSecret;
+  }
+});
+
+test("opslagstatus meet bestanden, vrije ruimte en de nieuwste back-up", async ({}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  const directory = await mkdtemp(path.join(tmpdir(), "top50-storage-health-"));
+  const backupDirectory = path.join(directory, "backups");
+  try {
+    await mkdir(backupDirectory);
+    await writeFile(path.join(directory, "gegevens.bin"), Buffer.alloc(1024));
+    await writeFile(path.join(backupDirectory, "backup.json"), "{}\n");
+    const { getStorageHealth } = await import("../src/server/storage-health");
+    const health = await getStorageHealth(directory, backupDirectory);
+    expect(health.usedBytes).toBeGreaterThanOrEqual(1027);
+    expect(health.availableBytes).toBeGreaterThan(0);
+    expect(health.remainingBytes).toBeGreaterThan(0);
+    expect(health.lastBackupAt).not.toBeNull();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("het vaste vergelijkingsschema is exact gebalanceerd", async ({}, testInfo) => {
@@ -245,6 +307,48 @@ test("inzendingen bewaren concepten, blokkeren groepsdubbelen en vergrendelen de
   }
 });
 
+test("handmatige nummers worden veilig bewaard en doen mee aan dubbele-detectie", async ({}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  const directory = await mkdtemp(path.join(tmpdir(), "top50-manual-submissions-"));
+  const storagePath = path.join(directory, "submissions.json");
+  const manualTrack: Track = {
+    id: "manual-viktor-12345678",
+    title: "  Eigen nummer  ",
+    artist: "  Onze Band  ",
+    album: "  Demo's  ",
+    owner: "viktor",
+    duration: 222,
+    cover: "/covers/handmatig.svg",
+    source: "manual",
+  };
+  try {
+    const saved = await saveDraftSubmission("viktor", [manualTrack], storagePath);
+    expect(saved.tracks[0]).toMatchObject({
+      id: manualTrack.id,
+      title: "Eigen nummer",
+      artist: "Onze Band",
+      album: "Demo's",
+      duration: 222,
+      source: "manual",
+    });
+
+    await expect(saveDraftSubmission("daniel", [{
+      ...manualTrack,
+      id: "manual-daniel-87654321",
+      title: "ÉIGEN nummer!",
+      artist: "onze band",
+      owner: "daniel",
+    }], storagePath)).rejects.toThrow(/al in de lijst/);
+    await expect(saveDraftSubmission("daniel", [{
+      ...manualTrack,
+      id: "manual-viktor-verkeerde-eigenaar",
+      owner: "daniel",
+    }], storagePath)).rejects.toThrow(/ongeldige gegevens/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("een cd-indeling bevat exact de top 50 en wordt definitief vergrendeld", async ({}, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
   const directory = await mkdtemp(path.join(tmpdir(), "top50-discs-"));
@@ -358,6 +462,8 @@ test("audio bewaart het origineel en maakt een Opus-afspeelbestand", async ({}, 
     expect(record.originalSize).toBe(wav.length);
     expect(record.playbackMimeType).toBe("audio/webm");
     expect(record.playbackSize).toBeGreaterThan(0);
+    expect(record.duration).toBeGreaterThan(0.9);
+    expect(record.duration).toBeLessThan(1.1);
     const original = await storage.getAudioAsset("audio-test", true);
     const playback = await storage.getAudioAsset("audio-test");
     expect(original?.mimeType).toBe("audio/wav");
@@ -489,6 +595,82 @@ test("Mijn 20 zoekt, bewaart centraal en maakt audio duidelijk verplicht", async
   }
 });
 
+test("Mijn 20 laat een niet-gevonden nummer handmatig en zonder iTunes-verzoek toevoegen", async ({ page, isMobile }) => {
+  let draft: Track[] = [];
+  let catalogRequests = 0;
+  await page.route("**/api/submissions/viktor", async (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: { submission: null } });
+    draft = (route.request().postDataJSON() as { tracks: Track[] }).tracks;
+    return route.fulfill({ json: { submission: { memberId: "viktor", tracks: draft, updatedAt: new Date().toISOString(), finalizedAt: null } } });
+  });
+  await page.route("**/api/audio", (route) => route.fulfill({ json: { audio: {} } }));
+  await page.route(/\/api\/audio\/manual-viktor-/, (route) => {
+    const trackId = decodeURIComponent(new URL(route.request().url()).pathname.split("/").pop()!);
+    return route.fulfill({ json: { audio: {
+      trackId,
+      title: "Eigen Nummer",
+      artist: "Onze Band",
+      originalName: "eigen-nummer.wav",
+      mimeType: "audio/webm",
+      size: 1234,
+      duration: 222,
+      uploadedAt: new Date().toISOString(),
+      url: `/api/audio/${trackId}`,
+    } } });
+  });
+  await page.route("**/api/itunes/catalog", (route) => {
+    catalogRequests += 1;
+    return route.fulfill({ status: 500, json: { error: "Onverwacht iTunes-verzoek" } });
+  });
+
+  await page.goto("/mijn-20");
+  const openButton = page.getByRole("button", { name: /Handmatig toevoegen/ });
+  await expect(openButton).toBeEnabled();
+  if (isMobile) {
+    const box = await openButton.boundingBox();
+    expect(box?.height).toBeGreaterThanOrEqual(32);
+  }
+  await openButton.click();
+  const dialog = page.getByRole("dialog", { name: "Staat je nummer niet in iTunes?" });
+  await expect(dialog).toBeVisible();
+
+  await dialog.getByRole("button", { name: "Nummer toevoegen" }).click();
+  await expect(page.locator("#manual-track-error")).toHaveText("Vul de titel van het nummer in.");
+  await page.locator("#manual-title").fill("Eigen Nummer");
+  await page.locator("#manual-artist").fill("Onze Band");
+  await page.locator("#manual-album").fill("Eerste Demo");
+  await expect(page.locator("#manual-duration")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Nummer toevoegen" }).click();
+
+  await expect(dialog).toBeHidden();
+  await expect(page.locator(".submission-row")).toHaveCount(1);
+  await expect(page.locator(".submission-row .row-track")).toContainText("Eigen Nummer");
+  await expect(page.locator(".submission-row .row-track")).toContainText("Onze Band");
+  await expect(page.locator(".submission-row .row-duration")).toHaveText("—");
+  await expect(page.locator(".audio-required")).toContainText("Audio ontbreekt");
+  await expect(page.locator(".row-cover-button")).toBeDisabled();
+  await expect.poll(() => draft.length).toBe(1);
+  expect(draft[0]).toMatchObject({
+    title: "Eigen Nummer",
+    artist: "Onze Band",
+    album: "Eerste Demo",
+    duration: 0,
+    cover: "/covers/handmatig.svg",
+    source: "manual",
+  });
+  expect(draft[0].id).toMatch(/^manual-viktor-[a-f0-9-]{36}$/);
+  expect(catalogRequests).toBe(0);
+
+  await page.locator("[data-audio-file]").setInputFiles({
+    name: "eigen-nummer.wav",
+    mimeType: "audio/wav",
+    buffer: Buffer.from("testaudio"),
+  });
+  await expect(page.locator(".audio-ready-label")).toContainText("Audio toegevoegd");
+  await expect(page.locator(".submission-row .row-duration")).toHaveText("3:42");
+  await expect(page.locator(".row-cover-button")).toBeEnabled();
+});
+
 test("een nummer uit een concept verwijderen ruimt beide server-audiobestanden op", async ({ page }) => {
   const track = { ...makeTrack("viktor", 0), id: "itunes-100000", source: "itunes" as const, sourceId: "100000" };
   let draft = [track];
@@ -549,7 +731,9 @@ test("audio van een definitieve inzending kan in de interface niet worden vervan
   await expect(page.locator(".submission-row")).toHaveCount(1);
   await expect(page.locator("[data-row-play]")).toBeVisible();
   await expect(page.locator("[data-upload-audio], [data-audio-file], [data-audio-drop]")).toHaveCount(0);
-  await expect(page.locator("#save-submission")).toHaveText("Inzending is definitief");
+  await expect(page.locator("#add-track-form")).toBeHidden();
+  await expect(page.locator("#save-submission")).toBeHidden();
+  await expect(page.locator(".remove-track")).toHaveCount(0);
 });
 
 test("de definitieve ranglijst toont alle 100 nummers en de grens", async ({ page, isMobile }) => {
@@ -619,6 +803,9 @@ test("de cd-pagina verdeelt automatisch, ordent toegankelijk en laat alleen Vikt
     ],
   } } }));
   await page.goto("/cds");
+  await expect(page.locator("#storage-card")).toBeVisible();
+  await page.locator("#storage-card summary").click();
+  await expect(page.locator("#storage-used")).toHaveText("1 GB");
   await expect(page.locator(".disc-track")).toHaveCount(50);
   await expect(page.locator("#disc-eyebrow")).toHaveText("Conceptindeling");
   if (!isMobile) {

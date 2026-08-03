@@ -4,7 +4,7 @@ Een website waarmee Viktor, Daniel, Keano, Sander en Jurjan ieder twintig nummer
 
 ## Zo werkt het
 
-De website loopt vanzelf door drie fases.
+De website loopt vanzelf door drie fases. Het startadres opent automatisch de pagina die bij de actuele fase hoort: **Mijn 20**, **Stemmen** of **Ranglijst**.
 
 ### 1. Iedereen levert twintig nummers in
 
@@ -12,6 +12,7 @@ Kies eerst links of bovenin je eigen naam. Op **Mijn 20** kun je daarna:
 
 - zoeken op titel, artiest of album;
 - een resultaat uit de Nederlandse iTunes Store toevoegen;
+- een nummer dat niet in iTunes staat handmatig toevoegen met titel, artiest en eventueel een album;
 - de iTunes-preview beluisteren als die beschikbaar is;
 - per nummer een volledig audiobestand kiezen of naar de kaart slepen;
 - het geüploade bestand afspelen en door de tijdlijn scrubben;
@@ -75,6 +76,8 @@ Verwijder je een nummer uit een conceptinzending, dan verwijdert de server beide
 
 FFmpeg voert de conversies uit en FFprobe leest vóór het definitief maken de werkelijke speelduur. Voor de 80-minutencontrole reserveert de server ook twee seconden tussen opeenvolgende tracks. De afspeel- en downloadroutes ondersteunen byte ranges, zodat vooruitspoelen en het hervatten van grote downloads goed werken.
 
+Bij een handmatig toegevoegd nummer hoef je geen speelduur in te vullen. FFprobe leest die automatisch uit zodra het audiobestand wordt geüpload; deze gemeten duur wordt daarna in de inzending en de interface gebruikt.
+
 ## Zoeken en cachen
 
 Zoeken gebruikt de gratis iTunes Search API van Apple en heeft geen API-sleutel nodig. De browser vraagt Apple nooit rechtstreeks aan: alle verzoeken lopen via de eigen server.
@@ -86,6 +89,8 @@ Zoeken gebruikt de gratis iTunes Search API van Apple en heeft geen API-sleutel 
 - Zodra een nummer wordt toegevoegd, bewaart de server zowel de gebruikte velden als het volledige oorspronkelijke Apple-record permanent in de lokale catalogus.
 
 Daardoor hoeven de vijf deelnemers dezelfde gegevens niet steeds opnieuw bij Apple op te vragen.
+
+Een handmatig toegevoegd nummer gebruikt geen Apple-verzoek. De ingevoerde gegevens staan rechtstreeks in het centrale concept en het nummer volgt daarna dezelfde regels als een iTunes-nummer: het mag maar één keer in de groep voorkomen en er moet vóór het definitief maken een volledig audiobestand zijn toegevoegd.
 
 ## Techniek
 
@@ -110,6 +115,8 @@ npm install
 npm run dev
 ```
 
+Zonder pincodeconfiguratie start de website in **vertrouwde lokale modus**. Je kunt dan in de interface tussen deelnemers wisselen. Gebruik die modus alleen lokaal of op een afgeschermd privénetwerk. Met `npm run auth:generate` maakt de website lokaal een `.env` en `pincodes.local.txt` met vijf unieke pincodes; beide bestanden worden door Git genegeerd.
+
 De productiebuild maken en starten:
 
 ```bash
@@ -118,6 +125,26 @@ npm run preview
 ```
 
 Met `FFMPEG_PATH=/pad/naar/ffmpeg` en `FFPROBE_PATH=/pad/naar/ffprobe` kun je andere installaties aanwijzen.
+
+## Aanmelden en deelnemersrechten
+
+Voor een server die via internet bereikbaar is, stel je pincode-login in met twee omgevingsvariabelen:
+
+```bash
+export AUTH_SECRET='een-willekeurige-geheime-waarde-van-minimaal-32-tekens'
+export MEMBER_PINS='{"viktor":"4829","daniel":"7316","keano":"2058","sander":"6941","jurjan":"3570"}'
+npm run preview
+```
+
+Gebruik eigen, unieke pincodes; de waarden hierboven zijn alleen een voorbeeld. Zodra `MEMBER_PINS` is ingesteld:
+
+- moet iedere deelnemer zich aanmelden met naam en pincode;
+- bewaart de browser alleen een ondertekende `HttpOnly`-sessiecookie;
+- kan een deelnemer alleen zijn eigen inzending, audio en stemmen aanpassen;
+- kan alleen Viktor de cd-indeling aanpassen, definitief maken en brandpakketten opnieuw opbouwen;
+- worden niet-aangemelde pagina- en API-verzoeken geweigerd.
+
+`AUTH_SECRET` moet dan minimaal 32 tekens bevatten. `MEMBER_PINS` moet voor alle vijf deelnemers een unieke pincode van minimaal vier tekens bevatten. Na acht mislukte pogingen voor dezelfde deelnemer en hetzelfde IP-adres wacht de server vijftien minuten voordat nieuwe pogingen worden geaccepteerd. Die limiet leeft in het geheugen van één serverproces.
 
 ## Opslag en back-ups
 
@@ -135,19 +162,27 @@ Standaard schrijft de server alles naar `storage/`:
 
 Gebruik op een server een blijvend, beschrijfbaar volume en maak van de hele map één back-up. Met `STORAGE_DIR=/pad/naar/opslag` kies je een andere locatie. `AUDIO_STORAGE_DIR` wordt nog als oude naam geaccepteerd.
 
+Viktor kan onderaan **De cd’s** de serveropslag openklappen. Daar staat hoeveel opslag in gebruik en beschikbaar is, of er een opslaglimiet geldt en wanneer in de back-upmap voor het laatst een bestand is gewijzigd. De website maakt zelf geen back-ups; plaats je back-upbestanden standaard in `storage/backups/` of wijs met `BACKUP_DIR` een andere map aan.
+
+De server controleert vóór een audio-upload en vóór het maken van brandpakketten of er genoeg ruimte overblijft. Instelbare grenzen:
+
+| Variabele | Betekenis | Standaard |
+| --- | --- | --- |
+| `STORAGE_QUOTA_GB` | Maximale totale opslag voor de website | geen vaste limiet |
+| `MIN_FREE_STORAGE_MB` | Vrije ruimte die na een bewerking minimaal over moet blijven | 512 MB |
+| `BACKUP_DIR` | Map waarin de website de nieuwste back-up zoekt | `storage/backups/` |
+
 Een nieuwe set van vijf definitieve inzendingen krijgt automatisch een nieuwe stemcampagne. Een oude cd-indeling wordt alleen hergebruikt als hij exact bij de huidige top 50 hoort.
-
-## Rollen en beveiliging
-
-De gekozen naam wordt alleen in `localStorage` van de browser bewaard. Er zijn geen accounts of wachtwoorden. De server controleert wel dat alleen de gekozen organisator-id `viktor` de cd-indeling aanpast, definitief maakt en een mislukte pakketopbouw opnieuw start, maar dat is geen echte authenticatie.
-
-Gebruik deze versie daarom op een vertrouwde privéserver voor de vijf deelnemers. Voeg echte aanmelding en autorisatie toe voordat de site openbaar bereikbaar wordt.
 
 ## API-routes
 
 | Route | Functie |
 | --- | --- |
+| `POST /api/auth/login` | aanmelden en een ondertekende sessie starten |
+| `POST /api/auth/logout` | sessie beëindigen |
+| `GET /api/auth/session` | actieve authenticatiemodus en deelnemer laden |
 | `GET /api/status` | fase en voortgang van alle deelnemers |
+| `GET /api/storage-status` | opslag- en back-upstatus voor Viktor |
 | `GET/PUT/POST /api/submissions/:memberId` | concept laden, concept bewaren, definitief maken |
 | `GET/POST/PUT/DELETE /api/voting/:memberId` | huidige vergelijking laden, keuze opslaan, stemmen definitief maken of laatste keuze terugnemen |
 | `GET /api/ranking` | definitieve batchranglijst zodra iedereen klaar is |
@@ -174,6 +209,8 @@ De tests controleren onder meer:
 - determinisme en invoervolgorde-onafhankelijkheid van de batchranglijst;
 - centrale conceptopslag, groepsbrede duplicaten en definitief vergrendelen;
 - navigatie en deelnemerkeuze op desktop en mobiel;
+- de fase-afhankelijke doorverwijzing vanaf het startadres;
+- ondertekende sessies en het blokkeren van toegang tot een andere deelnemer;
 - de 120 voortgangsmarkeringen, stemmen, terugnemen en expliciet definitief maken;
 - zoeken, audioverplichting en het ontbreken van een betekenisloze inzendvolgorde;
 - alle honderd ranglijstregels en de grens na nummer 50;

@@ -1,6 +1,7 @@
 ---
-import { members } from "../data/tracks";
+import { getMember, members } from "../data/tracks";
 import BaseLayout from "../layouts/BaseLayout.astro";
+import { authenticatedMember, isAuthenticationEnabled } from "../server/auth";
 
 type PageId = "stemmen" | "mijn-20" | "ranglijst" | "cds";
 
@@ -16,12 +17,20 @@ const navigation: { id: PageId; label: string; href: string }[] = [
   { id: "ranglijst", label: "Ranglijst", href: "/ranglijst" },
   { id: "cds", label: "De cd’s", href: "/cds" },
 ];
+const authEnabled = isAuthenticationEnabled();
+const signedInMemberId = authEnabled ? authenticatedMember(Astro.request) : undefined;
+const signedInMember = signedInMemberId ? getMember(signedInMemberId) : undefined;
 ---
 
 <BaseLayout title={title}>
+  <script is:inline define:vars={{ signedInMemberId, authEnabled }}>
+    document.documentElement.dataset.authEnabled = String(authEnabled);
+    if (signedInMemberId) document.documentElement.dataset.memberId = signedInMemberId;
+  </script>
+
   <div class="app-shell">
     <aside class="sidebar" aria-label="Hoofdnavigatie">
-      <a class="brand" href="/stemmen">De gezamenlijke 50</a>
+      <a class="brand" href="/">De gezamenlijke 50</a>
 
       <nav class="side-nav">
         {navigation.map((item) => (
@@ -35,28 +44,44 @@ const navigation: { id: PageId; label: string; href: string }[] = [
         ))}
       </nav>
 
-      <p class="member-list-label">Jij bent</p>
-      <ul class="member-list" aria-label="Kies deelnemer">
+      <p class="member-list-label">{authEnabled ? "De groep" : "Jij bent"}</p>
+      <ul class:list={["member-list", { "member-list--fixed": authEnabled }]} aria-label={authEnabled ? "Voortgang van de groep" : "Kies deelnemer"}>
         {members.map((member) => (
           <li>
-            <button type="button" data-member-id={member.id} aria-pressed="false">
-              <span class="member-dot" style={`--member-color:${member.color}`} aria-hidden="true"></span>
-              <span>{member.name}</span>
-              <span class="member-state" data-member-state={member.id} aria-hidden="true"></span>
-            </button>
+            {authEnabled ? (
+              <div class:list={{ "is-current": member.id === signedInMemberId }} data-member-id={member.id}>
+                <span class="member-dot" style={`--member-color:${member.color}`} aria-hidden="true"></span>
+                <span>{member.name}</span>
+                <span class="member-state" data-member-state={member.id}></span>
+              </div>
+            ) : (
+              <button type="button" data-member-id={member.id} aria-pressed="false">
+                <span class="member-dot" style={`--member-color:${member.color}`} aria-hidden="true"></span>
+                <span>{member.name}</span>
+                <span class="member-state" data-member-state={member.id}></span>
+              </button>
+            )}
           </li>
         ))}
       </ul>
+
+      {authEnabled && signedInMember && (
+        <button class="text-action logout-action" type="button" data-logout>Afmelden als {signedInMember.name}</button>
+      )}
     </aside>
 
     <header class="mobile-header">
-      <a class="brand" href="/stemmen">De gezamenlijke 50</a>
-      <label class="mobile-member-picker">
-        <span class="sr-only">Jij bent</span>
-        <select data-member-select aria-label="Kies deelnemer">
-          {members.map((member) => <option value={member.id}>{member.name}</option>)}
-        </select>
-      </label>
+      <a class="brand" href="/">De gezamenlijke 50</a>
+      {authEnabled && signedInMember ? (
+        <button class="mobile-member-name" type="button" data-logout title="Afmelden">{signedInMember.name}</button>
+      ) : (
+        <label class="mobile-member-picker">
+          <span class="sr-only">Jij bent</span>
+          <select data-member-select aria-label="Kies deelnemer">
+            {members.map((member) => <option value={member.id}>{member.name}</option>)}
+          </select>
+        </label>
+      )}
     </header>
 
     <main class:list={["page", `page--${active}`]}>
@@ -76,33 +101,37 @@ const navigation: { id: PageId; label: string; href: string }[] = [
     </nav>
   </div>
 
-  <dialog class="identity-dialog" id="identity-dialog" aria-labelledby="identity-title">
-    <p class="eyebrow">Welkom</p>
-    <h2 id="identity-title">Wie ben jij?</h2>
-    <p>Kies je eigen naam. Zo komen je nummers en keuzes op de juiste plek terecht.</p>
-    <div>
-      {members.map((member) => (
-        <button class="outlined-action" type="button" data-identify-member={member.id}>
-          <span class="member-dot" style={`--member-color:${member.color}`} aria-hidden="true"></span>{member.name}
-        </button>
-      ))}
-    </div>
-  </dialog>
+  {!authEnabled && (
+    <dialog class="identity-dialog" id="identity-dialog" aria-labelledby="identity-title">
+      <p class="eyebrow">Welkom</p>
+      <h2 id="identity-title">Wie ben jij?</h2>
+      <p>Kies je eigen naam. Zo komen je nummers en keuzes op de juiste plek terecht.</p>
+      <div>
+        {members.map((member) => (
+          <button class="outlined-action" type="button" data-identify-member={member.id}>
+            <span class="member-dot" style={`--member-color:${member.color}`} aria-hidden="true"></span>{member.name}
+          </button>
+        ))}
+      </div>
+    </dialog>
+  )}
 </BaseLayout>
 
 <script>
   import { isMemberId } from "../data/tracks";
 
+  const authEnabled = document.documentElement.dataset.authEnabled === "true";
+  const signedInMemberId = document.documentElement.dataset.memberId;
   const MEMBER_KEY = "gezamenlijke-top-50-member";
   const stored = localStorage.getItem(MEMBER_KEY);
   const hasStoredIdentity = isMemberId(stored);
-  const activeMember = isMemberId(stored) ? stored : "viktor";
+  const activeMember = isMemberId(signedInMemberId) ? signedInMemberId : isMemberId(stored) ? stored : "viktor";
   localStorage.setItem(MEMBER_KEY, activeMember);
 
   function selectMember(memberId: string, reload = false) {
     if (!isMemberId(memberId)) return;
     localStorage.setItem(MEMBER_KEY, memberId);
-    document.querySelectorAll<HTMLButtonElement>("[data-member-id]").forEach((button) => {
+    document.querySelectorAll<HTMLButtonElement>("button[data-member-id]").forEach((button) => {
       const selected = button.dataset.memberId === memberId;
       button.classList.toggle("is-current", selected);
       button.setAttribute("aria-pressed", String(selected));
@@ -112,27 +141,50 @@ const navigation: { id: PageId; label: string; href: string }[] = [
     if (reload) window.location.reload();
   }
 
-  document.querySelectorAll<HTMLButtonElement>("[data-member-id]").forEach((button) => {
-    button.addEventListener("click", () => selectMember(button.dataset.memberId ?? "", true));
-  });
-  document.querySelector<HTMLSelectElement>("[data-member-select]")?.addEventListener("change", (event) => {
-    selectMember((event.currentTarget as HTMLSelectElement).value, true);
-  });
-  selectMember(activeMember);
-  const identityDialog = document.querySelector<HTMLDialogElement>("#identity-dialog");
-  if (!hasStoredIdentity && identityDialog) identityDialog.showModal();
-  identityDialog?.addEventListener("cancel", (event) => event.preventDefault());
-  identityDialog?.querySelectorAll<HTMLButtonElement>("[data-identify-member]").forEach((button) => {
-    button.addEventListener("click", () => selectMember(button.dataset.identifyMember ?? "", true));
+  if (!authEnabled) {
+    document.querySelectorAll<HTMLButtonElement>("button[data-member-id]").forEach((button) => {
+      button.addEventListener("click", () => selectMember(button.dataset.memberId ?? "", true));
+    });
+    document.querySelector<HTMLSelectElement>("[data-member-select]")?.addEventListener("change", (event) => {
+      selectMember((event.currentTarget as HTMLSelectElement).value, true);
+    });
+    selectMember(activeMember);
+    const identityDialog = document.querySelector<HTMLDialogElement>("#identity-dialog");
+    if (!hasStoredIdentity && identityDialog) identityDialog.showModal();
+    identityDialog?.addEventListener("cancel", (event) => event.preventDefault());
+    identityDialog?.querySelectorAll<HTMLButtonElement>("[data-identify-member]").forEach((button) => {
+      button.addEventListener("click", () => selectMember(button.dataset.identifyMember ?? "", true));
+    });
+  }
+
+  document.querySelectorAll<HTMLButtonElement>("[data-logout]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+      window.location.assign("/aanmelden");
+    });
   });
 
   fetch("/api/status", { headers: { Accept: "application/json" } })
     .then((response) => response.ok ? response.json() : Promise.reject())
-    .then((payload: { status?: { members?: Array<{ memberId: string; finalized: boolean; votingDone: boolean; trackCount: number; voteCount: number }> } }) => {
+    .then((payload: { status?: { readyForVoting?: boolean; members?: Array<{ memberId: string; finalized: boolean; votingDone: boolean; trackCount: number; audioCount: number; voteCount: number }> } }) => {
+      const readyForVoting = Boolean(payload.status?.readyForVoting);
       for (const status of payload.status?.members ?? []) {
         const state = document.querySelector<HTMLElement>(`[data-member-state="${CSS.escape(status.memberId)}"]`);
         if (!state) continue;
-        state.textContent = status.votingDone ? "klaar" : status.voteCount === 120 ? "bevestigen" : status.finalized ? "ingeleverd" : `${status.trackCount}/20`;
+        state.textContent = readyForVoting
+          ? status.votingDone
+            ? "klaar"
+            : status.voteCount === 120
+              ? "bevestigen"
+              : `${status.voteCount}/120`
+          : status.finalized
+            ? "ingeleverd"
+            : status.trackCount < 20
+              ? `${status.trackCount}/20`
+              : status.audioCount < 20
+                ? `${status.audioCount}/20 audio`
+                : "bevestigen";
       }
     })
     .catch(() => undefined);

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600" role="img" aria-label="Neutrale albumcover">
+  <rect width="600" height="600" fill="#f4eedf"/>
+  <path d="M0 0h600v108H0z" fill="#8f101b"/>
+  <path d="M0 492h600v108H0z" fill="#101112"/>
+  <circle cx="300" cy="300" r="144" fill="none" stroke="#101112" stroke-width="5"/>
+  <circle cx="300" cy="300" r="101" fill="none" stroke="#8f101b" stroke-width="26"/>
+  <circle cx="300" cy="300" r="42" fill="#c18a16"/>
+  <path d="M40 158h172M388 442h172" fill="none" stroke="#101112" stroke-width="5"/>
+</svg>

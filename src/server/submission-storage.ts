@@ -65,6 +65,8 @@ function safeTrack(value: unknown, owner: MemberId): Track | undefined {
   const cover = safeUrl(track.cover, true);
   if (!id || !/^[a-zA-Z0-9_-]+$/.test(id) || !title || !artist || !cover || !Number.isFinite(track.duration)) return undefined;
   if (track.source === "itunes" && (!/^\d+$/.test(track.sourceId ?? "") || id !== `itunes-${track.sourceId}`)) return undefined;
+  if (track.source === "manual" && !id.startsWith(`manual-${owner}-`)) return undefined;
+  if (track.source && track.source !== "itunes" && track.source !== "manual") return undefined;
 
   return {
     id,
@@ -77,7 +79,7 @@ function safeTrack(value: unknown, owner: MemberId): Track | undefined {
     cover,
     tone: Number.isFinite(track.tone) ? Number(track.tone) : 330,
     previewUrl: safeUrl(track.previewUrl),
-    source: track.source === "itunes" ? "itunes" : undefined,
+    source: track.source === "itunes" || track.source === "manual" ? track.source : undefined,
     sourceId: track.source === "itunes" ? track.sourceId : undefined,
     sourceUrl: safeUrl(track.sourceUrl),
   };

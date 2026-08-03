@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
 import { isMemberId } from "../../../data/tracks";
+import { AuthorizationError, requireMember } from "../../../server/auth";
 import { loadGroupData } from "../../../server/group-state";
 import { buildComparisonSchedules, castVote, finalizeVoting, undoLastVote } from "../../../server/vote-storage";
 
@@ -33,18 +34,19 @@ async function votingPayload(memberIdValue: string) {
   };
 }
 
-export const GET: APIRoute = async ({ params }) => {
+export const GET: APIRoute = async ({ params, request }) => {
   try {
-    return Response.json(await votingPayload(params.memberId ?? ""), { headers: { "Cache-Control": "no-store" } });
+    const memberId = requireMember(request, params.memberId);
+    return Response.json(await votingPayload(memberId), { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Stemmen laden mislukt." }, { status: 400 });
+    return Response.json({ error: error instanceof Error ? error.message : "Stemmen laden mislukt." }, { status: error instanceof AuthorizationError ? error.status : 400 });
   }
 };
 
 export const POST: APIRoute = async ({ params, request }) => {
   if (!sameOrigin(request)) return Response.json({ error: "Ongeldige stemaanvraag." }, { status: 403 });
   try {
-    const memberId = params.memberId ?? "";
+    const memberId = requireMember(request, params.memberId);
     const group = await loadGroupData();
     if (!group.status.readyForVoting) throw new Error("Stemmen begint zodra alle vijf inzendingen en audiobestanden compleet zijn.");
     const body = await request.json() as { comparisonId?: unknown; winnerId?: unknown };
@@ -53,14 +55,14 @@ export const POST: APIRoute = async ({ params, request }) => {
     return Response.json(await votingPayload(memberId), { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Je keuze kon niet worden opgeslagen.";
-    return Response.json({ error: message }, { status: message.includes("niet meer actueel") ? 409 : 400 });
+    return Response.json({ error: message }, { status: error instanceof AuthorizationError ? error.status : message.includes("niet meer actueel") ? 409 : 400 });
   }
 };
 
 export const PUT: APIRoute = async ({ params, request }) => {
   if (!sameOrigin(request)) return Response.json({ error: "Ongeldige stemaanvraag." }, { status: 403 });
   try {
-    const memberId = params.memberId ?? "";
+    const memberId = requireMember(request, params.memberId);
     const group = await loadGroupData();
     if (!group.status.readyForVoting) throw new Error("Er kan nog niet worden gestemd.");
     await finalizeVoting(group.submissions, memberId);
@@ -68,7 +70,7 @@ export const PUT: APIRoute = async ({ params, request }) => {
   } catch (error) {
     return Response.json(
       { error: error instanceof Error ? error.message : "Je stemmen konden niet definitief worden gemaakt." },
-      { status: 400, headers: { "Cache-Control": "no-store" } },
+      { status: error instanceof AuthorizationError ? error.status : 400, headers: { "Cache-Control": "no-store" } },
     );
   }
 };
@@ -76,12 +78,12 @@ export const PUT: APIRoute = async ({ params, request }) => {
 export const DELETE: APIRoute = async ({ params, request }) => {
   if (!sameOrigin(request)) return Response.json({ error: "Ongeldige stemaanvraag." }, { status: 403 });
   try {
-    const memberId = params.memberId ?? "";
+    const memberId = requireMember(request, params.memberId);
     const group = await loadGroupData();
     if (!group.status.readyForVoting) throw new Error("Er zijn nog geen stemmen om terug te draaien.");
     await undoLastVote(group.submissions, memberId);
     return Response.json(await votingPayload(memberId), { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "De laatste keuze kon niet worden teruggedraaid." }, { status: 400 });
+    return Response.json({ error: error instanceof Error ? error.message : "De laatste keuze kon niet worden teruggedraaid." }, { status: error instanceof AuthorizationError ? error.status : 400 });
   }
 };

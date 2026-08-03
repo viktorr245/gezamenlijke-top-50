@@ -1,4 +1,5 @@
 import type { APIRoute } from "astro";
+import { AuthorizationError, requireOrganizer } from "../../server/auth";
 import { ensureBurnPackages, resolveBurnAudioSources, validateBurnCapacity } from "../../server/burn-packages";
 import { finalizeDiscLayout, getDiscLayout, saveDiscLayout } from "../../server/disc-layout-storage";
 import { loadGroupData } from "../../server/group-state";
@@ -13,7 +14,7 @@ function sameOrigin(request: Request): boolean {
 
 function errorResponse(error: unknown) {
   const message = error instanceof Error ? error.message : "De cd-indeling kon niet worden opgeslagen.";
-  return Response.json({ error: message }, { status: message.includes("al definitief") ? 409 : 400, headers: { "Cache-Control": "no-store" } });
+  return Response.json({ error: message }, { status: error instanceof AuthorizationError ? error.status : message.includes("al definitief") ? 409 : message.includes("schijfruimte") || message.includes("opslaglimiet") ? 507 : 400, headers: { "Cache-Control": "no-store" } });
 }
 
 async function rankingData() {
@@ -21,10 +22,6 @@ async function rankingData() {
   if (!group.status.votingComplete) return { group, ranking: null, topTracks: [] };
   const ranking = calculateRanking(group.tracks, Object.values(group.voteChoices).flat());
   return { group, ranking, topTracks: ranking.slice(0, 50) };
-}
-
-function requireOrganizer(memberId: unknown) {
-  if (memberId !== "viktor") throw new Error("Alleen Viktor kan de cd-indeling aanpassen en definitief maken.");
 }
 
 export const GET: APIRoute = async () => {
@@ -52,7 +49,7 @@ export const PUT: APIRoute = async ({ request }) => {
   if (!sameOrigin(request)) return Response.json({ error: "Ongeldige opslagaanvraag." }, { status: 403 });
   try {
     const body = await request.json() as { memberId?: unknown; discs?: unknown };
-    requireOrganizer(body.memberId);
+    requireOrganizer(request, body.memberId);
     const { group, topTracks } = await rankingData();
     if (!group.status.votingComplete) throw new Error("De cd-indeling komt beschikbaar zodra iedereen klaar is met stemmen.");
     const topTrackIds = topTracks.map((track) => track.id);
@@ -66,7 +63,7 @@ export const POST: APIRoute = async ({ request }) => {
   if (!sameOrigin(request)) return Response.json({ error: "Ongeldige aanvraag." }, { status: 403 });
   try {
     const body = await request.json().catch(() => ({})) as { memberId?: unknown };
-    requireOrganizer(body.memberId);
+    requireOrganizer(request, body.memberId);
     const { group, topTracks } = await rankingData();
     if (!group.status.votingComplete) throw new Error("De cd-indeling komt beschikbaar zodra iedereen klaar is met stemmen.");
     const layout = await getDiscLayout();

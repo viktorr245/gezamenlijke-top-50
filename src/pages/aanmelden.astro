@@ -1,0 +1,60 @@
+---
+import { members } from "../data/tracks";
+import BaseLayout from "../layouts/BaseLayout.astro";
+import { authenticatedMember, isAuthenticationEnabled } from "../server/auth";
+
+if (!isAuthenticationEnabled()) return Astro.redirect("/");
+if (authenticatedMember(Astro.request)) return Astro.redirect("/");
+---
+
+<BaseLayout title="Aanmelden">
+  <main class="login-page">
+    <section class="login-card" aria-labelledby="login-title">
+      <a class="brand" href="/">De gezamenlijke 50</a>
+      <p class="eyebrow">Privé voor de groep</p>
+      <h1 id="login-title">Wie ben jij?</h1>
+      <p>Gebruik de pincode die je van Viktor hebt gekregen.</p>
+
+      <form id="login-form">
+        <label for="login-member">Naam</label>
+        <select id="login-member" name="memberId" autocomplete="username">
+          {members.map((member) => <option value={member.id}>{member.name}</option>)}
+        </select>
+        <label for="login-pin">Pincode</label>
+        <input id="login-pin" name="pin" type="password" inputmode="numeric" autocomplete="current-password" minlength="4" required />
+        <button class="outlined-action" type="submit">Aanmelden</button>
+        <p class="form-message" id="login-message" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+  </main>
+</BaseLayout>
+
+<script>
+  const form = document.querySelector<HTMLFormElement>("#login-form")!;
+  const message = document.querySelector<HTMLElement>("#login-message")!;
+  const params = new URLSearchParams(window.location.search);
+  const requested = params.get("volgende");
+  const next = requested?.startsWith("/") && !requested.startsWith("//") ? requested : "/";
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    button.disabled = true;
+    message.textContent = "";
+    try {
+      const values = new FormData(form);
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ memberId: values.get("memberId"), pin: values.get("pin") }),
+      });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Aanmelden is mislukt.");
+      window.location.assign(next);
+    } catch (error) {
+      message.textContent = error instanceof Error ? error.message : "Aanmelden is mislukt.";
+      message.classList.add("error");
+      button.disabled = false;
+    }
+  });
+</script>

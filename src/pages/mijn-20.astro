@@ -19,7 +19,12 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     </div>
 
     <form class="add-track-form" id="add-track-form">
-      <label for="track-search">Nummer toevoegen</label>
+      <div class="add-track-label-row">
+        <label for="track-search">Nummer toevoegen</label>
+        <button class="text-action manual-track-open" id="manual-track-open" type="button" disabled>
+          <span class="manual-track-question">Niet gevonden? </span>Handmatig toevoegen
+        </button>
+      </div>
       <div class="track-search-anchor">
         <div class="track-search-controls">
           <input
@@ -63,6 +68,35 @@ import ProgressMarks from "../components/ProgressMarks.astro";
       <p id="spots-left">Inzending controleren…</p>
     </div>
   </section>
+
+  <dialog class="manual-track-dialog" id="manual-track-dialog" aria-labelledby="manual-track-title">
+    <button class="manual-track-close" type="button" data-close-manual aria-label="Sluiten">
+      <i class="ph ph-x" aria-hidden="true"></i>
+    </button>
+    <p class="eyebrow">Handmatig toevoegen</p>
+    <h2 id="manual-track-title">Staat je nummer niet in iTunes?</h2>
+    <p>Vul de gegevens zelf in. Na het toevoegen lees je met het audiobestand automatisch de speelduur in.</p>
+
+    <form class="manual-track-form" id="manual-track-form" novalidate>
+      <label class="manual-field manual-field--wide" for="manual-title">
+        <span>Titel</span>
+        <input id="manual-title" name="title" type="text" autocomplete="off" maxlength="200" required />
+      </label>
+      <label class="manual-field" for="manual-artist">
+        <span>Artiest</span>
+        <input id="manual-artist" name="artist" type="text" autocomplete="off" maxlength="200" required />
+      </label>
+      <label class="manual-field" for="manual-album">
+        <span>Album <small>optioneel</small></span>
+        <input id="manual-album" name="album" type="text" autocomplete="off" maxlength="300" />
+      </label>
+      <p class="manual-track-error" id="manual-track-error" role="alert" aria-live="assertive"></p>
+      <div class="manual-track-actions">
+        <button class="outlined-action manual-track-submit" type="submit">Nummer toevoegen</button>
+        <button class="text-action" type="button" data-close-manual>Annuleren</button>
+      </div>
+    </form>
+  </dialog>
 </AppShell>
 
 <script>
@@ -76,6 +110,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     originalName: string;
     mimeType: string;
     size: number;
+    duration?: number;
     uploadedAt: string;
     url: string;
   };
@@ -90,12 +125,21 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   const memberId = getActiveMember();
   const state: { submissionIds: string[]; customTracks: Record<string, Track> } = { submissionIds: [], customTracks: {} };
   const list = document.querySelector<HTMLOListElement>("#submission-list")!;
+  const page = document.querySelector<HTMLElement>(".submission-page")!;
   const form = document.querySelector<HTMLFormElement>("#add-track-form")!;
   const input = document.querySelector<HTMLInputElement>("#track-search")!;
   const searchAnchor = document.querySelector<HTMLElement>(".track-search-anchor")!;
   const searchPanel = document.querySelector<HTMLElement>("#track-search-results")!;
   const searchContent = document.querySelector<HTMLElement>("#track-search-content")!;
   const searchSubmit = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  const manualOpen = document.querySelector<HTMLButtonElement>("#manual-track-open")!;
+  const manualDialog = document.querySelector<HTMLDialogElement>("#manual-track-dialog")!;
+  const manualForm = document.querySelector<HTMLFormElement>("#manual-track-form")!;
+  const manualTitle = document.querySelector<HTMLInputElement>("#manual-title")!;
+  const manualArtist = document.querySelector<HTMLInputElement>("#manual-artist")!;
+  const manualAlbum = document.querySelector<HTMLInputElement>("#manual-album")!;
+  const manualError = document.querySelector<HTMLElement>("#manual-track-error")!;
+  const manualSubmit = manualForm.querySelector<HTMLButtonElement>('[type="submit"]')!;
   const count = document.querySelector<HTMLElement>("#submission-count")!;
   const audioProgress = document.querySelector<HTMLElement>("#submission-audio-progress")!;
   const marks = Array.from(document.querySelectorAll<HTMLElement>("#submission-progress-marks .progress-mark"));
@@ -118,6 +162,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   let audioIndexFailed = false;
   let submissionStatusLoaded = false;
   let finalSubmission: FinalSubmission | undefined;
+  let addingTrack = false;
 
   function escapeHtml(value: unknown): string {
     return String(value).replace(/[&<>"']/g, (character) => ({
@@ -158,10 +203,8 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   }
 
   let draftSaveQueue = Promise.resolve();
-  function saveState() {
-    if (!submissionStatusLoaded || finalSubmission) return;
-    const tracks = state.submissionIds.map(getTrack).filter((track): track is Track => Boolean(track));
-    draftSaveQueue = draftSaveQueue.then(async () => {
+  function persistDraft(tracks: Track[]): Promise<void> {
+    const request = draftSaveQueue.then(async () => {
       const response = await fetch(`/api/submissions/${memberId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -169,10 +212,35 @@ import ProgressMarks from "../components/ProgressMarks.astro";
       });
       const payload = await response.json() as { error?: string };
       if (!response.ok) throw new Error(payload.error ?? "De lijst kon niet worden opgeslagen.");
-    }).catch((error) => {
+    });
+    draftSaveQueue = request.catch(() => undefined);
+    return request;
+  }
+
+  function saveState() {
+    if (!submissionStatusLoaded || finalSubmission) return;
+    const tracks = state.submissionIds.map(getTrack).filter((track): track is Track => Boolean(track));
+    void persistDraft(tracks).catch((error) => {
       setMessage(error instanceof Error ? error.message : "De lijst kon niet worden opgeslagen.", true);
       loadFinalSubmission();
     });
+  }
+
+  async function addTrack(track: Track) {
+    if (addingTrack || isSubmissionLocked() || state.submissionIds.length >= 20 || isTrackSelected(track)) return false;
+    const currentTracks = state.submissionIds.map(getTrack).filter((candidate): candidate is Track => Boolean(candidate));
+    addingTrack = true;
+    render();
+    try {
+      await persistDraft([...currentTracks, track]);
+      state.customTracks[track.id] = track;
+      state.submissionIds.push(track.id);
+      setMessage("");
+      return true;
+    } finally {
+      addingTrack = false;
+      render();
+    }
   }
 
   function formattedFinalizedAt(value: string): string {
@@ -199,6 +267,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
       && typeof record.originalName === "string"
       && typeof record.mimeType === "string"
       && typeof record.size === "number"
+      && (record.duration === undefined || (typeof record.duration === "number" && Number.isFinite(record.duration) && record.duration > 0))
       && typeof record.uploadedAt === "string"
       && typeof record.url === "string"
       && record.url.startsWith("/api/audio/"),
@@ -269,7 +338,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     }
 
     const position = playbackPositions.get(track.id) ?? 0;
-    const duration = track.duration;
+    const duration = record.duration ?? track.duration;
     return `
       <div class="submission-audio submission-audio--ready" data-row-player ${finalSubmission ? "" : "data-audio-drop"}>
         <span class="audio-ready-label" title="${escapeHtml(record.originalName)}">
@@ -303,6 +372,13 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     message.classList.toggle("error", error);
   }
 
+  function displayedDuration(track: Track): string {
+    const measured = audioRecords.get(track.id)?.duration;
+    if (measured) return formatDuration(measured);
+    if (track.duration > 0) return formatDuration(track.duration);
+    return "—";
+  }
+
   function sizeSearchPanel() {
     if (searchPanel.hidden) return;
     const bottomSpace = window.matchMedia("(max-width: 767px)").matches ? 74 : 16;
@@ -315,6 +391,23 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     input.setAttribute("aria-expanded", String(open));
     if (open) sizeSearchPanel();
     else stopPreview();
+  }
+
+  function closeManualDialog() {
+    if (!manualDialog.open || addingTrack) return;
+    manualDialog.close();
+  }
+
+  function openManualDialog() {
+    if (isSubmissionLocked() || state.submissionIds.length >= 20 || addingTrack) return;
+    setSearchOpen(false);
+    manualError.textContent = "";
+    manualDialog.showModal();
+    window.requestAnimationFrame(() => manualTitle.focus());
+  }
+
+  function manualTrackId(): string {
+    return `manual-${memberId}-${crypto.randomUUID()}`;
   }
 
   function renderSearchStatus(kind: "loading" | "empty" | "error" | "hint", text: string) {
@@ -640,6 +733,9 @@ import ProgressMarks from "../components/ProgressMarks.astro";
       const payload = await response.json() as { audio?: unknown; error?: string };
       if (!response.ok || !isAudioRecord(payload.audio)) throw new Error(payload.error ?? "Uploaden is mislukt.");
       audioRecords.set(track.id, payload.audio);
+      if (payload.audio.duration) {
+        state.customTracks[track.id] = { ...track, duration: Math.round(payload.audio.duration) };
+      }
       playbackPositions.set(track.id, 0);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Uploaden is mislukt.", true);
@@ -684,22 +780,32 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     list.innerHTML = submissionTracks
       .map((track, index) => {
         const removing = removingTracks.has(track.id);
+        const canPlay = audioRecords.has(track.id) || Boolean(track.previewUrl);
         return `
           <li class="submission-row${finalSubmission ? " is-final" : ""}" data-track-id="${escapeHtml(track.id)}">
             <span class="row-index">${index + 1}</span>
-            <button class="row-cover-button" type="button" data-cover-play aria-label="Speel ${escapeHtml(track.title)}" aria-pressed="false">
+            <button class="row-cover-button" type="button" data-cover-play aria-label="Speel ${escapeHtml(track.title)}" aria-pressed="false" ${canPlay ? "" : "disabled"}>
               <img src="${escapeHtml(track.cover)}" alt="" width="72" height="72" draggable="false" />
-              <span class="row-cover-icon" aria-hidden="true"><i class="ph ph-play"></i></span>
+              <span class="row-cover-icon" aria-hidden="true">
+                <svg class="row-cover-play" viewBox="0 0 24 24" focusable="false">
+                  <path d="M7 4.5 19 12 7 19.5Z" fill="#fff" stroke="#8f101b" stroke-width="2.4" stroke-linejoin="round" />
+                </svg>
+                <svg class="row-cover-pause" viewBox="0 0 24 24" focusable="false">
+                  <rect x="5.5" y="4.5" width="5" height="15" rx="1" fill="#fff" stroke="#8f101b" stroke-width="2.2" />
+                  <rect x="13.5" y="4.5" width="5" height="15" rx="1" fill="#fff" stroke="#8f101b" stroke-width="2.2" />
+                </svg>
+              </span>
             </button>
             <span class="row-track"><strong>${escapeHtml(track.title)}</strong><span>${escapeHtml(track.artist)}</span></span>
-            <span class="row-duration">${formatDuration(track.duration)}</span>
-            <button class="text-action remove-track" type="button" data-remove ${selectionLocked || removing ? "disabled" : ""}>${removing ? "Verwijderen…" : "Verwijder"}</button>
+            <span class="row-duration">${displayedDuration(track)}</span>
+            ${finalSubmission ? "" : `<button class="text-action remove-track" type="button" data-remove ${selectionLocked || removing ? "disabled" : ""}>${removing ? "Verwijderen…" : "Verwijder"}</button>`}
             ${audioControls(track)}
           </li>`;
       })
       .join("");
 
     count.textContent = String(state.submissionIds.length);
+    page.classList.toggle("is-final", Boolean(finalSubmission));
     marks.forEach((mark, index) => mark.classList.toggle("complete", index < state.submissionIds.length));
     const remaining = 20 - state.submissionIds.length;
     const audioCount = submissionTracks.filter((track) => audioRecords.has(track.id)).length;
@@ -714,11 +820,15 @@ import ProgressMarks from "../components/ProgressMarks.astro";
             ? `Nog ${missingAudio} ${missingAudio === 1 ? "audiobestand" : "audiobestanden"} toevoegen.`
             : "Alles compleet. Controleer je lijst en maak hem definitief."
           : `Nog ${remaining} ${remaining === 1 ? "plek" : "plekken"} vrij.`;
-    input.disabled = selectionLocked || remaining === 0;
-    searchSubmit.disabled = selectionLocked || remaining === 0;
-    saveButton.disabled = selectionLocked || remaining !== 0 || missingAudio !== 0 || !audioIndexLoaded || audioIndexFailed;
+    input.disabled = selectionLocked || remaining === 0 || addingTrack;
+    searchSubmit.disabled = selectionLocked || remaining === 0 || addingTrack;
+    manualOpen.disabled = selectionLocked || remaining === 0 || addingTrack;
+    saveButton.disabled = selectionLocked || remaining !== 0 || missingAudio !== 0 || !audioIndexLoaded || audioIndexFailed || addingTrack;
     saveButton.textContent = finalSubmission ? "Inzending is definitief" : "Inzending definitief maken";
-    if (selectionLocked || remaining === 0) setSearchOpen(false);
+    if (selectionLocked || remaining === 0) {
+      setSearchOpen(false);
+      if (manualDialog.open && !addingTrack) manualDialog.close();
+    }
   }
 
   form.addEventListener("submit", (event) => {
@@ -741,6 +851,67 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     firstControl.focus();
   });
 
+  manualOpen.addEventListener("click", openManualDialog);
+
+  manualDialog.addEventListener("click", (event) => {
+    if ((event.target as HTMLElement).closest("[data-close-manual]")) closeManualDialog();
+  });
+
+  manualDialog.addEventListener("cancel", (event) => {
+    if (!addingTrack) return;
+    event.preventDefault();
+  });
+
+  manualForm.addEventListener("input", () => {
+    manualError.textContent = "";
+  });
+
+  manualForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (addingTrack || isSubmissionLocked() || state.submissionIds.length >= 20) return;
+    const title = manualTitle.value.trim();
+    const artist = manualArtist.value.trim();
+    const album = manualAlbum.value.trim();
+    if (!title) {
+      manualError.textContent = "Vul de titel van het nummer in.";
+      manualTitle.focus();
+      return;
+    }
+    if (!artist) {
+      manualError.textContent = "Vul de artiest in.";
+      manualArtist.focus();
+      return;
+    }
+    const track: Track = {
+      id: manualTrackId(),
+      title,
+      artist,
+      ...(album ? { album } : {}),
+      owner: memberId,
+      duration: 0,
+      cover: "/covers/handmatig.svg",
+      source: "manual",
+    };
+    if (isTrackSelected(track)) {
+      manualError.textContent = "Dit nummer staat al in jouw lijst.";
+      manualTitle.focus();
+      return;
+    }
+
+    manualSubmit.disabled = true;
+    manualSubmit.textContent = "Toevoegen…";
+    try {
+      if (!await addTrack(track)) return;
+      manualForm.reset();
+      manualDialog.close();
+    } catch (error) {
+      manualError.textContent = error instanceof Error ? error.message : "Het nummer kon niet worden toegevoegd.";
+    } finally {
+      manualSubmit.disabled = false;
+      manualSubmit.textContent = "Nummer toevoegen";
+    }
+  });
+
   searchPanel.addEventListener("click", async (event) => {
     const target = event.target as HTMLElement;
     if (target.closest("[data-close-search]")) {
@@ -757,21 +928,16 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     }
 
     const addButton = target.closest<HTMLButtonElement>("[data-add-track]");
-    if (!addButton || addButton.disabled || isSubmissionLocked() || state.submissionIds.length >= 20) return;
+    if (!addButton || addButton.disabled || addingTrack || isSubmissionLocked() || state.submissionIds.length >= 20) return;
     const track = currentSearchTracks.get(addButton.dataset.addTrack!);
     if (!track || isTrackSelected(track)) return;
     addButton.disabled = true;
     addButton.textContent = "Opslaan…";
     try {
       const storedTrack = await pinITunesTrack(track);
-      if (state.submissionIds.length >= 20 || isTrackSelected(storedTrack)) return;
-      state.customTracks[storedTrack.id] = { ...storedTrack, owner: memberId };
-      state.submissionIds.push(storedTrack.id);
-      saveState();
+      if (!await addTrack({ ...storedTrack, owner: memberId })) return;
       input.value = "";
       setSearchOpen(false);
-      setMessage("");
-      render();
     } catch (error) {
       addButton.disabled = false;
       addButton.textContent = "Voeg toe";

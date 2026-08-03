@@ -25,7 +25,17 @@ import { members } from "../data/tracks";
     </div>
 
     <div id="ranking-content" hidden>
-      <div class="ranking-toolbar"><h2>Alle 100 nummers</h2></div>
+      <div class="ranking-toolbar">
+        <h2>Alle 100 nummers</h2>
+        <details class="ranking-explainer">
+          <summary>Hoe is dit berekend?</summary>
+          <div>
+            <button class="ranking-explainer-close" type="button" aria-label="Sluit uitleg"><i class="ph ph-x" aria-hidden="true"></i></button>
+            <p>Alle 600 keuzes worden tegelijk verwerkt met een Bradley–Terry-model. Daarmee wordt de geschatte voorkeur voor ieder nummer berekend, zonder dat het tijdstip of de volgorde van stemmen voordeel geeft.</p>
+            <p>De rangschikking gebruikt vervolgens 2.000 statistische steekproeven. De vijftig nummers met de grootste kans op een plek in de top 50 komen boven de streep. Iedere deelnemer en iedere vergelijking weegt even zwaar.</p>
+          </div>
+        </details>
+      </div>
       <div class="ranking-columns" aria-hidden="true">
         <span>#</span><span>Nummer</span><span>Ingebracht door</span><span>Kans top 50</span>
       </div>
@@ -64,6 +74,11 @@ import { members } from "../data/tracks";
   const list = document.querySelector<HTMLOListElement>("#ranking-list")!;
   const copy = document.querySelector<HTMLElement>("#ranking-copy")!;
   const count = document.querySelector<HTMLElement>("#ready-count")!;
+
+  document.querySelector<HTMLButtonElement>(".ranking-explainer-close")?.addEventListener("click", () => {
+    const details = document.querySelector<HTMLDetailsElement>(".ranking-explainer");
+    if (details) details.open = false;
+  });
 
   function escapeHtml(value: unknown): string {
     return String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character]!);

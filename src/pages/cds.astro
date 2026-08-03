@@ -67,6 +67,17 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
         <p id="disc-message" role="status" aria-live="polite"></p>
       </div>
     </div>
+
+    <details class="storage-card" id="storage-card" hidden>
+      <summary>Serveropslag</summary>
+      <dl>
+        <div><dt>In gebruik</dt><dd id="storage-used">—</dd></div>
+        <div><dt>Vrij beschikbaar</dt><dd id="storage-free">—</dd></div>
+        <div><dt>Opslaglimiet</dt><dd id="storage-quota">—</dd></div>
+        <div><dt>Laatste back-up gevonden</dt><dd id="storage-backup">—</dd></div>
+      </dl>
+      <p id="storage-warning" role="status" aria-live="polite"></p>
+    </details>
   </section>
 </AppShell>
 
@@ -129,6 +140,29 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
   function formatBytes(bytes: number) {
     if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toLocaleString("nl-NL", { maximumFractionDigits: 1 })} GB`;
     return `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`;
+  }
+
+  async function loadStorageStatus() {
+    if (memberId !== "viktor") return;
+    const card = document.querySelector<HTMLDetailsElement>("#storage-card")!;
+    card.hidden = false;
+    try {
+      const response = await fetch(`/api/storage-status?memberId=${encodeURIComponent(memberId)}`, { headers: { Accept: "application/json" } });
+      const payload = await response.json() as { storage?: { usedBytes: number; availableBytes: number; quotaBytes: number | null; remainingBytes: number; minimumFreeBytes: number; lastBackupAt: string | null }; error?: string };
+      if (!response.ok || !payload.storage) throw new Error(payload.error ?? "Opslagstatus niet beschikbaar.");
+      const storage = payload.storage;
+      document.querySelector<HTMLElement>("#storage-used")!.textContent = formatBytes(storage.usedBytes);
+      document.querySelector<HTMLElement>("#storage-free")!.textContent = formatBytes(storage.availableBytes);
+      document.querySelector<HTMLElement>("#storage-quota")!.textContent = storage.quotaBytes === null ? "niet ingesteld" : formatBytes(storage.quotaBytes);
+      document.querySelector<HTMLElement>("#storage-backup")!.textContent = storage.lastBackupAt
+        ? new Intl.DateTimeFormat("nl-NL", { dateStyle: "medium", timeStyle: "short" }).format(new Date(storage.lastBackupAt))
+        : "geen back-up aangetroffen";
+      document.querySelector<HTMLElement>("#storage-warning")!.textContent = storage.remainingBytes < storage.minimumFreeBytes
+        ? "Let op: de vrije opslagruimte is onder de ingestelde veiligheidsmarge."
+        : "";
+    } catch (error) {
+      document.querySelector<HTMLElement>("#storage-warning")!.textContent = error instanceof Error ? error.message : "Opslagstatus niet beschikbaar.";
+    }
   }
 
   function renderBurnPackages(status: BurnPackageStatus) {
@@ -351,6 +385,7 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
     render();
   });
   retryBurnPackages.addEventListener("click", () => void loadBurnPackages(true));
+  void loadStorageStatus();
 
   fetch("/api/disc-layout", { headers: { Accept: "application/json" } })
     .then(async (response) => {

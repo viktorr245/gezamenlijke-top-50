@@ -5,6 +5,12 @@ import { loadVotingState, type VotingState } from "./vote-storage";
 
 export type GroupPhase = "inzenden" | "stemmen" | "ranglijst";
 
+export function startPathForPhase(phase: GroupPhase): "/mijn-20" | "/stemmen" | "/ranglijst" {
+  if (phase === "stemmen") return "/stemmen";
+  if (phase === "ranglijst") return "/ranglijst";
+  return "/mijn-20";
+}
+
 export type MemberStatus = {
   memberId: MemberId;
   trackCount: number;

@@ -4,13 +4,13 @@ export default defineConfig({
   testDir: "./tests",
   fullyParallel: true,
   use: {
-    baseURL: "http://127.0.0.1:4321",
+    baseURL: "http://127.0.0.1:4322",
     trace: "retain-on-failure",
   },
   webServer: {
-    command: "ASTRO_DEV_BACKGROUND=0 npm run dev -- --host 127.0.0.1 --port 4321",
-    url: "http://127.0.0.1:4321",
-    reuseExistingServer: true,
+    command: "npm run build && MEMBER_PINS= AUTH_SECRET= HOST=127.0.0.1 PORT=4322 npm run preview",
+    url: "http://127.0.0.1:4322",
+    reuseExistingServer: false,
   },
   projects: [
     {

@@ -4,9 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "astro dev",
+    "auth:generate": "node ./scripts/generate-local-access.mjs",
+    "dev": "node --env-file-if-exists=.env ./node_modules/astro/bin/astro.mjs dev",
     "build": "astro check && astro build",
-    "preview": "node ./dist/server/entry.mjs",
+    "preview": "node --env-file-if-exists=.env ./dist/server/entry.mjs",
     "test": "playwright test"
   },
   "dependencies": {

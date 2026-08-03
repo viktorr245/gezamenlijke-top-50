@@ -7,9 +7,10 @@ import { getAudioAsset } from "./audio-storage";
 import { getDiscLayout, type DiscLayout } from "./disc-layout-storage";
 import { loadGroupData } from "./group-state";
 import { calculateRanking } from "./ranking";
+import { assertStorageCapacity, STORAGE_ROOT } from "./storage-health";
 import { ZipWriter } from "./zip-writer";
 
-const DEFAULT_STORAGE_ROOT = path.resolve(process.env.STORAGE_DIR ?? process.env.AUDIO_STORAGE_DIR ?? path.join(process.cwd(), "storage"));
+const DEFAULT_STORAGE_ROOT = STORAGE_ROOT;
 const FFMPEG_PATH = process.env.FFMPEG_PATH ?? "ffmpeg";
 const FFPROBE_PATH = process.env.FFPROBE_PATH ?? "ffprobe";
 const MAX_DISC_SECONDS = 80 * 60;
@@ -314,6 +315,10 @@ export async function ensureBurnPackages(layout: DiscLayout, tracks: Track[], st
       const orderedTracks = layout.discs.flat().map((id) => trackById.get(id)).filter((track): track is Track => Boolean(track));
       if (orderedTracks.length !== 50) throw new Error("De definitieve cd-indeling bevat niet alle vijftig nummers.");
       const sources = await validateBurnCapacity(layout, orderedTracks);
+      const wavBytes = [...sources.values()].reduce((sum, source) => sum + source.duration * 44_100 * 2 * 2, 0);
+      // De drie cd-zipbestanden en het overkoepelende zipbestand bevatten samen
+      // ongeveer twee kopieën van alle ongecomprimeerde WAV-data.
+      await assertStorageCapacity(Math.ceil(wavBytes * 2.05), storageRoot);
       await mkdir(files.directory, { recursive: true });
       const modifiedAt = new Date(layout.finalizedAt!);
       for (let index = 0; index < 3; index += 1) {

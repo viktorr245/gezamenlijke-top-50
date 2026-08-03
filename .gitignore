@@ -7,3 +7,5 @@ qa/
 storage/
 design-qa.md
 .DS_Store
+.env
+pincodes.local.txt

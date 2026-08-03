@@ -2,7 +2,8 @@ import { open } from "node:fs/promises";
 import { Readable } from "node:stream";
 import type { APIRoute } from "astro";
 import { getAudioAsset, removeAudio, saveAudio, validateTrackId } from "../../../server/audio-storage";
-import { getSubmission } from "../../../server/submission-storage";
+import { AuthorizationError, requireMember } from "../../../server/auth";
+import { getSubmission, saveDraftSubmission } from "../../../server/submission-storage";
 import { withSubmissionAudioLock } from "../../../server/submission-audio-lock";
 
 export const prerender = false;
@@ -73,21 +74,28 @@ export const POST: APIRoute = async ({ params, request }) => {
     const form = await request.formData();
     const file = form.get("audio");
     if (!(file instanceof File)) return errorResponse("Kies eerst een audiobestand.", 400);
-    const memberId = String(form.get("memberId") ?? "");
+    const memberId = requireMember(request, form.get("memberId"));
     const audio = await withSubmissionAudioLock(async () => {
       const submission = await getSubmission(memberId);
       const track = submission?.tracks.find((candidate) => candidate.id === trackId);
       if (!submission || !track) throw new Error("Dit nummer staat niet in jouw inzending.");
       if (submission.finalizedAt) throw new Error("Audio van een definitieve inzending kan niet meer worden vervangen.");
-      return saveAudio(trackId, file, {
+      const audio = await saveAudio(trackId, file, {
         title: track.title,
         artist: track.artist,
       });
+      const measuredDuration = audio.duration ? Math.max(1, Math.round(audio.duration)) : track.duration;
+      if (measuredDuration !== track.duration) {
+        await saveDraftSubmission(memberId, submission.tracks.map((candidate) => (
+          candidate.id === trackId ? { ...candidate, duration: measuredDuration } : candidate
+        )));
+      }
+      return audio;
     });
     return Response.json({ audio }, { status: 201, headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Uploaden is mislukt.";
-    return errorResponse(message, message.includes("100 MB") ? 413 : message.includes("definitieve inzending") ? 409 : message.includes("jouw inzending") ? 403 : message.includes("duurde te lang") ? 504 : message.includes("FFmpeg") ? 500 : 400);
+    return errorResponse(message, error instanceof AuthorizationError ? error.status : message.includes("100 MB") ? 413 : message.includes("opslaglimiet") || message.includes("schijfruimte") ? 507 : message.includes("definitieve inzending") ? 409 : message.includes("jouw inzending") ? 403 : message.includes("duurde te lang") ? 504 : message.includes("FFmpeg") || message.includes("FFprobe") ? 500 : 400);
   }
 };
 
@@ -95,7 +103,7 @@ export const DELETE: APIRoute = async ({ params, request }) => {
   if (!sameOrigin(request)) return errorResponse("Ongeldige verwijderaanvraag.", 403);
   try {
     const trackId = validateTrackId(params.trackId);
-    const memberId = new URL(request.url).searchParams.get("memberId") ?? "";
+    const memberId = requireMember(request, new URL(request.url).searchParams.get("memberId"));
     const removed = await withSubmissionAudioLock(async () => {
       const submission = await getSubmission(memberId);
       if (!submission?.tracks.some((track) => track.id === trackId)) throw new Error("Dit nummer staat niet in jouw inzending.");
@@ -105,6 +113,6 @@ export const DELETE: APIRoute = async ({ params, request }) => {
     return removed ? new Response(null, { status: 204 }) : errorResponse("Er is geen audiobestand om te verwijderen.", 404);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Verwijderen is mislukt.";
-    return errorResponse(message, message.includes("definitieve inzending") ? 409 : message.includes("jouw inzending") ? 403 : 400);
+    return errorResponse(message, error instanceof AuthorizationError ? error.status : message.includes("definitieve inzending") ? 409 : message.includes("jouw inzending") ? 403 : 400);
   }
 };

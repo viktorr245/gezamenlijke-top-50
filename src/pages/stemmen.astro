@@ -8,7 +8,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     <div class="vote-heading">
       <div>
         <p class="eyebrow">Vergelijking</p>
-        <h1 id="vote-title">Kies wat je écht<br />nog een keer wilt horen.</h1>
+        <h1 id="vote-title">Kies wat je écht nog een keer wilt horen.</h1>
       </div>
       <div class="vote-progress" aria-label="Voortgang van de stemming">
         <p><strong id="vote-count">0</strong><span>van 120</span></p>
@@ -201,7 +201,9 @@ import ProgressMarks from "../components/ProgressMarks.astro";
       const track = next.tracks[side];
       card.dataset.trackId = track.id;
       card.classList.remove("is-selected", "is-rejected");
-      card.querySelector<HTMLElement>("[data-title]")!.textContent = track.title;
+      const title = card.querySelector<HTMLElement>("[data-title]")!;
+      title.textContent = track.title;
+      title.title = track.title;
       card.querySelector<HTMLElement>("[data-artist]")!.textContent = track.artist;
       const cover = card.querySelector<HTMLImageElement>("[data-cover]")!;
       cover.src = track.cover;

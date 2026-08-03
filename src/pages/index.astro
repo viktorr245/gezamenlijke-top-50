@@ -1,3 +1,7 @@
 ---
-return Astro.redirect("/stemmen");
+import { loadGroupData, startPathForPhase } from "../server/group-state";
+
+const group = await loadGroupData();
+Astro.response.status = 302;
+Astro.response.headers.set("Location", startPathForPhase(group.status.phase));
 ---
