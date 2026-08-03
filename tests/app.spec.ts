@@ -688,6 +688,7 @@ test("na keuze 120 volgt eerst een expliciete definitieve bevestiging", async ({
 
 test("Mijn 20 zoekt, bewaart centraal en maakt audio duidelijk verplicht", async ({ page, isMobile }) => {
   let draft: Track[] = [];
+  let audioUploads = 0;
   await page.route("**/api/submissions/viktor", async (route) => {
     if (route.request().method() === "GET") return route.fulfill({ json: { submission: null } });
     const body = route.request().postDataJSON() as { tracks: Track[] };
@@ -696,6 +697,20 @@ test("Mijn 20 zoekt, bewaart centraal en maakt audio duidelijk verplicht", async
   });
   await page.route("**/api/audio", (route) => route.fulfill({ json: { audio: {} } }));
   const result = { ...makeTrack("viktor", 0), id: "itunes-100000", source: "itunes" as const, sourceId: "100000", previewUrl: "https://example.test/preview.m4a" };
+  await page.route(`**/api/audio/${result.id}`, async (route) => {
+    audioUploads += 1;
+    await route.fulfill({ json: { audio: {
+      trackId: result.id,
+      title: result.title,
+      artist: result.artist,
+      originalName: "gesleept-nummer.wav",
+      mimeType: "audio/webm",
+      size: 1234,
+      duration: 180,
+      uploadedAt: new Date().toISOString(),
+      url: `/api/audio/${result.id}`,
+    } } });
+  });
   await page.route("**/api/itunes/search?**", (route) => route.fulfill({ json: { tracks: [result] } }));
   await page.route("**/api/itunes/catalog", (route) => route.fulfill({ json: { track: result } }));
   await page.goto("/mijn-20");
@@ -724,6 +739,20 @@ test("Mijn 20 zoekt, bewaart centraal en maakt audio duidelijk verplicht", async
       expect(box?.height).toBeGreaterThanOrEqual(44);
     }
   }
+
+  const dataTransfer = await page.evaluateHandle(() => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(["testaudio"], "gesleept-nummer.wav", { type: "audio/wav" }));
+    return transfer;
+  });
+  const dropzone = page.locator("[data-audio-drop]");
+  await dropzone.dispatchEvent("dragenter", { dataTransfer });
+  await dropzone.dispatchEvent("dragover", { dataTransfer });
+  await expect(dropzone).toHaveClass(/is-drag-over/);
+  await expect(dropzone.locator(".audio-drop-release")).toBeVisible();
+  await dropzone.dispatchEvent("drop", { dataTransfer });
+  await expect(page.locator(".audio-ready-label")).toContainText("Audio toegevoegd");
+  expect(audioUploads).toBe(1);
 });
 
 test("Mijn 20 kan na een tijdelijke laadfout opnieuw proberen", async ({ page }) => {

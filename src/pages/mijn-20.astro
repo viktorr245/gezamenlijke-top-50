@@ -331,7 +331,11 @@ import ProgressMarks from "../components/ProgressMarks.astro";
         <div class="submission-audio submission-audio--missing" data-audio-drop>
           <span class="audio-required">
             <i class="ph ph-warning-circle" aria-hidden="true"></i>
-            <span><strong>Audio ontbreekt</strong><small>Sleep audio hierheen of kies een bestand.</small></span>
+            <span>
+              <strong>Audio ontbreekt</strong>
+              <small class="audio-drop-instruction">Sleep audio hierheen of kies een bestand.</small>
+              <small class="audio-drop-release">Laat los om het bestand toe te voegen.</small>
+            </span>
           </span>
           <button class="outlined-action audio-upload-action" type="button" data-upload-audio ${uploadDisabled ? "disabled" : ""}>
             <i class="ph ph-upload-simple" aria-hidden="true"></i><span>Audio toevoegen</span>
@@ -1051,8 +1055,17 @@ import ProgressMarks from "../components/ProgressMarks.astro";
 
   list.addEventListener("dragenter", (event) => {
     const dropzone = (event.target as HTMLElement).closest<HTMLElement>("[data-audio-drop]");
-    if (!dropzone || !(event as DragEvent).dataTransfer?.types.includes("Files")) return;
+    if (!dropzone || !Array.from((event as DragEvent).dataTransfer?.types ?? []).includes("Files")) return;
     event.preventDefault();
+    dropzone.classList.add("is-drag-over");
+  });
+
+  list.addEventListener("dragover", (event) => {
+    const dragEvent = event as DragEvent;
+    const dropzone = (event.target as HTMLElement).closest<HTMLElement>("[data-audio-drop]");
+    if (!dropzone || !Array.from(dragEvent.dataTransfer?.types ?? []).includes("Files")) return;
+    event.preventDefault();
+    if (dragEvent.dataTransfer) dragEvent.dataTransfer.dropEffect = "copy";
     dropzone.classList.add("is-drag-over");
   });
 
