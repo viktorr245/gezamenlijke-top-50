@@ -272,7 +272,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     card.querySelector<HTMLInputElement>("[data-seek]")!.addEventListener("input", (event) => {
       const position = Number((event.currentTarget as HTMLInputElement).value);
       setPosition(card, position, Number((event.currentTarget as HTMLInputElement).max));
-      if (activeCard === card) audio.currentTime = position;
+      if (activeCard === card) audioNormalizer.seek(position);
     });
     card.querySelector<HTMLButtonElement>("[data-vote]")!.addEventListener("click", () => choose(card));
   });

@@ -1216,7 +1216,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     if (!seek || !trackId) return;
     const position = Number(seek.value);
     playbackPositions.set(trackId, position);
-    if (activeSubmissionId === trackId && Number.isFinite(position)) submissionAudio.currentTime = position;
+    if (activeSubmissionId === trackId && Number.isFinite(position)) submissionNormalizer.seek(position);
     const duration = Number(seek.max);
     updateSubmissionTimeline(trackId, position, duration);
   });

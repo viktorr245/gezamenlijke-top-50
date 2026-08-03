@@ -2,12 +2,15 @@ type AudioContextConstructor = new () => AudioContext;
 
 export type PlaybackNormalizer = {
   activate: () => Promise<void>;
+  seek: (position: number) => void;
 };
 
 const VOLUME_STORAGE_KEY = "gezamenlijke-top-50-volume";
 const VOLUME_EVENT = "gezamenlijke-top-50-volume-change";
 const DEFAULT_VOLUME = 85;
 const START_FADE_SECONDS = 0.06;
+const SEEK_FADE_OUT_SECONDS = 0.012;
+const SEEK_FADE_IN_SECONDS = 0.04;
 
 export function getGlobalPlaybackVolume(): number {
   const stored = Number(localStorage.getItem(VOLUME_STORAGE_KEY));
@@ -26,6 +29,25 @@ export function createPlaybackNormalizer(audio: HTMLAudioElement): PlaybackNorma
   let outputGain: GainNode | undefined;
   let initialized = false;
   let unavailable = false;
+  let seekGeneration = 0;
+  let seekTimer: number | undefined;
+  let seekRestoreTimer: number | undefined;
+
+  function cancelPendingSeek() {
+    seekGeneration += 1;
+    window.clearTimeout(seekTimer);
+    window.clearTimeout(seekRestoreTimer);
+    seekTimer = undefined;
+    seekRestoreTimer = undefined;
+  }
+
+  function fadeIn(seconds: number) {
+    if (!context || !startGain) return;
+    const now = context.currentTime;
+    startGain.gain.cancelScheduledValues(now);
+    startGain.gain.setValueAtTime(0, now);
+    startGain.gain.linearRampToValueAtTime(1, now + seconds);
+  }
 
   function applyVolume(percent: number) {
     const volume = percent / 100;
@@ -41,6 +63,7 @@ export function createPlaybackNormalizer(audio: HTMLAudioElement): PlaybackNorma
   window.addEventListener(VOLUME_EVENT, (event) => applyVolume((event as CustomEvent<number>).detail));
 
   async function activate() {
+    cancelPendingSeek();
     if (unavailable) return;
     try {
       if (!initialized) {
@@ -80,12 +103,7 @@ export function createPlaybackNormalizer(audio: HTMLAudioElement): PlaybackNorma
         initialized = true;
       }
       if (context?.state === "suspended") await context.resume();
-      if (context && startGain) {
-        const now = context.currentTime;
-        startGain.gain.cancelScheduledValues(now);
-        startGain.gain.setValueAtTime(0, now);
-        startGain.gain.linearRampToValueAtTime(1, now + START_FADE_SECONDS);
-      }
+      fadeIn(START_FADE_SECONDS);
     } catch {
       unavailable = true;
       await context?.close().catch(() => undefined);
@@ -96,5 +114,47 @@ export function createPlaybackNormalizer(audio: HTMLAudioElement): PlaybackNorma
     }
   }
 
-  return { activate };
+  function seek(position: number) {
+    if (!Number.isFinite(position)) return;
+    const target = Math.max(0, position);
+    cancelPendingSeek();
+    const generation = seekGeneration;
+
+    if (!context || !startGain || audio.paused) {
+      audio.currentTime = target;
+      return;
+    }
+
+    const now = context.currentTime;
+    if (typeof startGain.gain.cancelAndHoldAtTime === "function") {
+      startGain.gain.cancelAndHoldAtTime(now);
+    } else {
+      startGain.gain.cancelScheduledValues(now);
+      startGain.gain.setValueAtTime(1, now);
+    }
+    startGain.gain.linearRampToValueAtTime(0, now + SEEK_FADE_OUT_SECONDS);
+
+    seekTimer = window.setTimeout(() => {
+      if (generation !== seekGeneration) return;
+      let restored = false;
+      const restore = () => {
+        if (restored || generation !== seekGeneration) return;
+        restored = true;
+        window.clearTimeout(seekRestoreTimer);
+        audio.removeEventListener("seeked", restore);
+        fadeIn(SEEK_FADE_IN_SECONDS);
+      };
+      audio.addEventListener("seeked", restore, { once: true });
+      seekRestoreTimer = window.setTimeout(restore, 250);
+      try {
+        audio.currentTime = target;
+      } catch {
+        restore();
+      }
+    }, SEEK_FADE_OUT_SECONDS * 1000);
+  }
+
+  audio.addEventListener("pause", cancelPendingSeek);
+
+  return { activate, seek };
 }

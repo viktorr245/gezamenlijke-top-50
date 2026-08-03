@@ -815,6 +815,77 @@ test("snel wisselen tussen nummers laat alleen de laatste stemkaart afspelen", a
   await expect(right).toHaveClass(/is-playing/);
 });
 
+test("doorspoelen dempt de uitgang rond de tijdsprong", async ({ page }) => {
+  await page.addInitScript(() => {
+    const events: string[] = [];
+    class FakeAudioParam {
+      value = 0;
+      cancelScheduledValues() { events.push("cancel"); return this; }
+      cancelAndHoldAtTime() { events.push("hold"); return this; }
+      setValueAtTime(value: number) { this.value = value; events.push(`set:${value}`); return this; }
+      linearRampToValueAtTime(value: number) { this.value = value; events.push(`ramp:${value}`); return this; }
+    }
+    class FakeAudioNode {
+      gain = new FakeAudioParam();
+      threshold = new FakeAudioParam();
+      knee = new FakeAudioParam();
+      ratio = new FakeAudioParam();
+      attack = new FakeAudioParam();
+      release = new FakeAudioParam();
+      connect<T>(target: T) { return target; }
+    }
+    class FakeAudioContext {
+      state = "running";
+      currentTime = 1;
+      destination = new FakeAudioNode();
+      createMediaElementSource() { return new FakeAudioNode(); }
+      createGain() { return new FakeAudioNode(); }
+      createDynamicsCompressor() { return new FakeAudioNode(); }
+      resume() { return Promise.resolve(); }
+      close() { return Promise.resolve(); }
+    }
+    class FakeAudio extends EventTarget {
+      src = "";
+      paused = true;
+      duration = 180;
+      volume = 1;
+      private position = 0;
+      get currentTime() { return this.position; }
+      set currentTime(value: number) {
+        this.position = value;
+        events.push(`seek:${value}`);
+        queueMicrotask(() => this.dispatchEvent(new Event("seeked")));
+      }
+      load() {}
+      pause() { this.paused = true; }
+      removeAttribute(name: string) { if (name === "src") this.src = ""; }
+      play() { this.paused = false; return Promise.resolve(); }
+    }
+    Object.defineProperty(window, "AudioContext", { configurable: true, value: FakeAudioContext });
+    Object.defineProperty(window, "Audio", { configurable: true, value: FakeAudio });
+    Object.defineProperty(window, "__audioEvents", { configurable: true, value: events });
+  });
+  await page.route("**/api/voting/viktor", (route) => route.fulfill({ json: votingPayload(7) }));
+
+  await page.goto("/stemmen");
+  await page.locator('[data-choice="left"] [data-play]').click();
+  const immediateEvents = await page.evaluate(() => {
+    const events = (window as typeof window & { __audioEvents: string[] }).__audioEvents;
+    events.length = 0;
+    const seek = document.querySelector<HTMLInputElement>('[data-choice="left"] [data-seek]')!;
+    seek.value = "60";
+    seek.dispatchEvent(new Event("input", { bubbles: true }));
+    return [...events];
+  });
+
+  expect(immediateEvents).toContain("hold");
+  expect(immediateEvents).toContain("ramp:0");
+  expect(immediateEvents).not.toContain("seek:60");
+  await expect.poll(() => page.evaluate(() =>
+    (window as typeof window & { __audioEvents: string[] }).__audioEvents,
+  )).toEqual(expect.arrayContaining(["seek:60", "ramp:1"]));
+});
+
 test("na keuze 120 volgt eerst een expliciete definitieve bevestiging", async ({ page }) => {
   let voteCount = 120;
   let finalized = false;
