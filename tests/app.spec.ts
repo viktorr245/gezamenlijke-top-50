@@ -1162,7 +1162,11 @@ test("de definitieve ranglijst toont alle 100 nummers en de grens", async ({ pag
   await expect(page.locator(".ranking-row")).toHaveCount(100);
   await expect(page.locator(".cutoff-marker")).toHaveCount(1);
   await expect(page.locator(".ranking-columns")).toContainText("Kans top 50");
+  await expect(page.locator(".ranking-columns")).toContainText("Sterkte");
   await expect(page.locator(".ranking-row.outside")).toHaveCount(50);
+  await expect(page.locator(".rank-strength")).toHaveCount(100);
+  await expect(page.locator(".rank-strength-mobile")).toHaveCount(100);
+  await expect(page.locator(isMobile ? ".rank-strength-mobile" : ".rank-strength").first()).toBeVisible();
   await expect(page.locator(".rank-uncertainty")).toHaveCount(100);
   await expect(page.locator(".rank-uncertainty").first()).toContainText("90%: plek");
   const cutoffMargins = await page.locator(".cutoff-marker").evaluate((element) => {

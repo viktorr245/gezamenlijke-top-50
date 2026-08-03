@@ -1854,13 +1854,13 @@ h1 {
 .ranking-columns,
 .ranking-row-button {
   display: grid;
-  grid-template-columns: 74px 72px minmax(260px, 1fr) 235px 88px;
+  grid-template-columns: 74px 72px minmax(260px, 1fr) 190px 105px 105px;
   align-items: center;
   gap: 0;
 }
 
 .ranking-columns {
-  grid-template-columns: 146px minmax(260px, 1fr) 235px 88px;
+  grid-template-columns: 146px minmax(260px, 1fr) 190px 105px 105px;
   padding: 12px 0 9px;
   border-bottom: 2px solid var(--ink);
   color: var(--oxblood);
@@ -1875,8 +1875,12 @@ h1 {
   background-image: url("/paper-texture.webp");
 }
 
-.ranking-columns span:last-child {
+.ranking-columns span:nth-last-child(-n + 2) {
   text-align: right;
+}
+
+.ranking-columns span:nth-last-child(2) {
+  padding-right: 18px;
 }
 
 .ranking-list {
@@ -1967,6 +1971,18 @@ h1 {
 .rank-owner .member-dot {
   width: 20px;
   height: 20px;
+}
+
+.rank-strength {
+  justify-self: end;
+  padding-right: 18px;
+  font-family: var(--display);
+  font-size: 21px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rank-strength-mobile {
+  display: none;
 }
 
 .rank-score {
@@ -2778,11 +2794,29 @@ h1 {
 
   .ranking-columns,
   .ranking-row-button {
-    grid-template-columns: 62px 62px minmax(180px, 1fr) 150px 70px;
+    grid-template-columns: 55px 58px minmax(140px, 1fr) 95px 70px 74px;
   }
 
   .ranking-columns {
-    grid-template-columns: 124px minmax(180px, 1fr) 150px 70px;
+    grid-template-columns: 113px minmax(140px, 1fr) 95px 70px 74px;
+    font-size: 14px;
+  }
+
+  .ranking-columns span:nth-last-child(2),
+  .rank-strength {
+    padding-right: 10px;
+  }
+
+  .rank-strength {
+    font-size: 18px;
+  }
+
+  .rank-score {
+    font-size: 25px;
+  }
+
+  .rank-score i {
+    display: none;
   }
 
   .rank-track strong {
@@ -3763,6 +3797,14 @@ h1 {
   .rank-owner .member-dot {
     width: 14px;
     height: 14px;
+  }
+
+  .rank-strength {
+    display: none;
+  }
+
+  .rank-strength-mobile {
+    display: inline;
   }
 
   .rank-score {

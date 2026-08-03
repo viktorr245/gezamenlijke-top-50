@@ -32,12 +32,13 @@ import { members } from "../data/tracks";
           <div>
             <button class="ranking-explainer-close" type="button" aria-label="Sluit uitleg"><i class="ph ph-x" aria-hidden="true"></i></button>
             <p>Alle 600 keuzes worden tegelijk verwerkt met een Bradley–Terry-model. Daarmee wordt de geschatte voorkeur voor ieder nummer berekend, zonder dat het tijdstip of de volgorde van stemmen voordeel geeft.</p>
+            <p>De kolom <strong>Sterkte</strong> toont die geschatte voorkeur als modelscore. Nul is het gemiddelde van alle honderd nummers; een positieve waarde ligt erboven en een negatieve waarde eronder.</p>
             <p>De rangschikking gebruikt vervolgens 100.000 statistische steekproeven. De vijftig nummers met de grootste kans op een plek in de top 50 komen boven de streep. Iedere deelnemer en iedere vergelijking weegt even zwaar.</p>
           </div>
         </details>
       </div>
       <div class="ranking-columns" aria-hidden="true">
-        <span>#</span><span>Nummer</span><span>Ingebracht door</span><span>Kans top 50</span>
+        <span>#</span><span>Nummer</span><span>Ingebracht door</span><span>Sterkte</span><span>Kans top 50</span>
       </div>
       <ol class="ranking-list" id="ranking-list"></ol>
     </div>
@@ -62,6 +63,7 @@ import { members } from "../data/tracks";
   type RankedTrack = Track & {
     rank: number;
     selected: boolean;
+    strength: number;
     top50Probability: number;
     expectedRank: number;
     rankLow: number;
@@ -128,10 +130,20 @@ import { members } from "../data/tracks";
     return String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character]!);
   }
 
+  function formatStrength(value: number): string {
+    const roundedValue = Math.abs(value) < 0.005 ? 0 : value;
+    return roundedValue.toLocaleString("nl-NL", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+      signDisplay: "exceptZero",
+    });
+  }
+
   function rowMarkup(track: RankedTrack) {
     const member = getMember(track.owner);
     const stability = track.leaveOneOutSelections === 5 ? "Stabiele keuze" : `${track.leaveOneOutSelections} van 5 controles in de top 50`;
     const expectedRank = track.expectedRank.toLocaleString("nl-NL", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+    const strength = formatStrength(track.strength);
     return `
       <li class="ranking-row ${track.selected ? "" : "outside"}" data-rank="${track.rank}">
         <button class="ranking-row-button" type="button" data-history-track-id="${escapeHtml(track.id)}" aria-label="Bekijk de keuzes voor ${escapeHtml(track.title)}" title="Verwachte plek ${track.expectedRank.toFixed(1)} · 90%-interval ${track.rankLow}–${track.rankHigh} · ${stability} · Klik voor alle keuzes">
@@ -139,9 +151,10 @@ import { members } from "../data/tracks";
           <img src="${escapeHtml(track.cover)}" alt="" width="64" height="64" />
           <span class="rank-track">
             <span class="rank-track-main"><strong>${escapeHtml(track.title)}</strong><span>${escapeHtml(track.artist)}</span></span>
-            <small class="rank-uncertainty">Verwacht ${expectedRank} · 90%: plek ${track.rankLow}–${track.rankHigh}</small>
+            <small class="rank-uncertainty"><span class="rank-strength-mobile">Sterkte ${strength} · </span>Verwacht ${expectedRank} · 90%: plek ${track.rankLow}–${track.rankHigh}</small>
           </span>
           <span class="rank-owner"><i class="member-dot" style="--member-color:${member.color}"></i>${member.name}</span>
+          <span class="rank-strength" title="Modelsterkte ${strength}; 0,00 is gemiddeld">${strength}</span>
           <strong class="rank-score"><span>${Math.round(track.top50Probability * 100)}%</span><i class="ph ph-caret-right" aria-hidden="true"></i></strong>
         </button>
       </li>

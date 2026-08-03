@@ -57,6 +57,7 @@ De server berekent alle 600 keuzes tegelijk met een geregulariseerd Bradley–Te
 
 Daarna trekt de server 100.000 steekproeven uit de benaderde posteriorverdeling. De definitieve uitkomst wordt in het serverproces gecachet zolang de nummers en stemmen gelijk blijven. Per nummer worden onder meer berekend:
 
+- de modelsterkte ten opzichte van het gemiddelde van alle honderd nummers;
 - de kans om in de top 50 te eindigen;
 - de verwachte positie;
 - een 90%-interval voor de positie;
