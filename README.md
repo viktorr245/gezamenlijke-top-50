@@ -144,7 +144,7 @@ Met `FFMPEG_PATH=/pad/naar/ffmpeg`, `FFPROBE_PATH=/pad/naar/ffprobe` en `YTDLP_P
 
 ### Met Docker
 
-De meegeleverde `Dockerfile` bouwt de Astro-server en bevat FFmpeg, FFprobe, een gecontroleerde officiële yt-dlp-binary voor x86-64 of ARM64 en een container-healthcheck. Start hem met een blijvend opslagvolume en een zelf gegenereerde `.env`:
+De meegeleverde `Dockerfile` bouwt de Astro-server en bevat FFmpeg, FFprobe, Python, de gecontroleerde officiële portable yt-dlp-release en een container-healthcheck. Start hem met een blijvend opslagvolume en een zelf gegenereerde `.env`:
 
 ```bash
 npm run auth:generate
@@ -161,7 +161,7 @@ docker run --rm \
 
 Gebruik in productie precies één container tegelijk. De JSON-opslag en schrijfwachtrijen zijn ontworpen voor één serverproces.
 
-De Docker-build zet yt-dlp bewust vast op een officiële versie met een gecontroleerde SHA-256-checksum. YouTube verandert regelmatig; werkt ophalen later niet meer, werk dan de versie en de twee bijbehorende officiële checksums bovenin de `Dockerfile` bij en bouw de container opnieuw.
+De Docker-build zet yt-dlp bewust vast op een officiële versie met een gecontroleerde SHA-256-checksum. YouTube verandert regelmatig; werkt ophalen later niet meer, werk dan de versie en bijbehorende officiële checksum bovenin de `Dockerfile` bij en bouw de container opnieuw.
 
 ## Aanmelden en deelnemersrechten
 
