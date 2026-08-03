@@ -632,7 +632,7 @@ test("de navigatie en deelnemerkeuze werken op ieder scherm", async ({ page, isM
   await page.route("**/api/disc-layout", (route) => route.fulfill({ json: { status: groupStatus(), layout: null, tracks: [], organizerId: "viktor" } }));
   await page.goto("/stemmen");
   const nav = page.locator(isMobile ? ".bottom-nav" : ".side-nav");
-  for (const [name, path] of [["Mijn 20", "/mijn-20"], ["Ranglijst", "/ranglijst"], ["De cd’s", "/cds"], ["Stemmen", "/stemmen"]] as const) {
+  for (const [name, path] of [["Mijn 20", "/mijn-20"], ["Ranglijst", "/ranglijst"], ["De cd’s", "/cds"], ["Uitleg", "/uitleg"], ["Stemmen", "/stemmen"]] as const) {
     await nav.getByRole("link", { name }).click();
     await expect(page).toHaveURL(new RegExp(`${path}$`));
   }
@@ -645,6 +645,48 @@ test("de navigatie en deelnemerkeuze werken op ieder scherm", async ({ page, isM
     try { return await page.evaluate(() => localStorage.getItem("gezamenlijke-top-50-member")); }
     catch { return null; }
   }).toBe("daniel");
+});
+
+test("de interactieve uitleg doorloopt het hele ranglijstmodel", async ({ page, isMobile }) => {
+  await page.goto("/uitleg");
+  await expect(page.getByRole("heading", { name: "Van één keuze naar de top 50." })).toBeVisible();
+  const nav = page.locator(isMobile ? ".bottom-nav" : ".side-nav");
+  await expect(nav.getByRole("link", { name: "Uitleg" })).toHaveAttribute("aria-current", "page");
+
+  await expect(page.locator("#demo-strengths > div")).toHaveCount(4);
+  for (let choice = 0; choice < 6; choice += 1) await page.locator('[data-demo-choice="left"]').click();
+  await expect(page.locator("#demo-choice-count")).toHaveText("6");
+  await expect(page.getByRole("heading", { name: /eindigt bovenaan/ })).toBeVisible();
+  await page.getByRole("button", { name: "Opnieuw" }).click();
+  await expect(page.locator("#demo-choice-count")).toHaveText("0");
+
+  await page.locator("#strength-difference").fill("0");
+  await expect(page.locator("#probability-a")).toHaveText("50%");
+  await expect(page.locator("#probability-b")).toHaveText("50%");
+  await page.locator("#evidence-count").fill("12");
+  await expect(page.locator("#evidence-value")).toHaveText("12");
+  await page.getByRole("button", { name: /Betekent zes keer winnen/ }).click();
+  await expect(page.locator("#split-answer")).toBeVisible();
+
+  await page.locator("#simulaties").scrollIntoViewIfNeeded();
+  await expect(page.locator("#learn-progress-current")).toHaveText("4");
+  await expect(page.locator("#simulation-ranking > li")).toHaveCount(4);
+  await expect(page.locator("#simulation-metrics > tr")).toHaveCount(4);
+  await page.getByRole("button", { name: "Trek er één" }).click();
+  await expect(page.locator("#simulation-number")).toHaveText("Trekking 2");
+  await page.getByRole("button", { name: "Bereken 100.000" }).click();
+  await expect(page.locator("#simulation-progress-text")).toHaveText("100.000 mogelijke ranglijsten berekend. De cijfers zijn nu stabiel.");
+  await expect(page.locator("#simulation-metrics > tr").first()).toContainText("%");
+
+  await page.getByLabel("52,63%").check();
+  await page.getByLabel("49,4").check();
+  await page.getByLabel("In 90% van de simulaties lag de plek tussen 37 en 62.").check();
+  await page.getByRole("button", { name: "Controleer mijn antwoorden" }).click();
+  await expect(page.locator("#quiz-result")).toHaveText("3 van 3 — je hebt het door.");
+  await page.locator("#beslissing").scrollIntoViewIfNeeded();
+  await expect(page.locator("#learn-progress-current")).toHaveText("6");
+  await page.getByText("Ik wil nu wél de precieze wiskunde zien").click();
+  await expect(page.locator(".learn-technical")).toContainText("θ ~ N(θ̂, H−1)");
 });
 
 test("stemmen gebruikt 120 markeringen, centrale audio en ondersteunt één stap terug", async ({ page }) => {
@@ -1314,7 +1356,7 @@ test("lange paginatitels blijven op een scherm van 320 pixels volledig zichtbaar
   await page.route("**/api/ranking", (route) => route.fulfill({ json: { status: groupStatus(), ranking: null } }));
   await page.route("**/api/disc-layout", (route) => route.fulfill({ json: { status: groupStatus(), layout: null, tracks: [], organizerId: "viktor" } }));
 
-  for (const [pathName, selector] of [["/ranglijst", "#ranking-title"], ["/cds", "#discs-title"]] as const) {
+  for (const [pathName, selector] of [["/ranglijst", "#ranking-title"], ["/cds", "#discs-title"], ["/uitleg", ".learn-hero h1"]] as const) {
     await page.goto(pathName);
     const bounds = await page.locator(selector).evaluate((element) => {
       const box = element.getBoundingClientRect();
@@ -1331,7 +1373,7 @@ test("alle pagina’s houden document-scroll en horizontale overflow tegen", asy
   await page.route("**/api/audio", (route) => route.fulfill({ json: { audio: {} } }));
   await page.route("**/api/ranking", (route) => route.fulfill({ json: { status: groupStatus(), ranking: null } }));
   await page.route("**/api/disc-layout", (route) => route.fulfill({ json: { status: groupStatus(), layout: null, tracks: [], organizerId: "viktor" } }));
-  for (const pathName of ["/stemmen", "/mijn-20", "/ranglijst", "/cds"]) {
+  for (const pathName of ["/stemmen", "/mijn-20", "/ranglijst", "/cds", "/uitleg"]) {
     await page.goto(pathName);
     const sizes = await page.evaluate(() => ({
       bodyWidth: document.body.scrollWidth,

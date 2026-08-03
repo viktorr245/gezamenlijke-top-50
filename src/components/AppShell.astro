@@ -3,7 +3,7 @@ import { getMember, members } from "../data/tracks";
 import BaseLayout from "../layouts/BaseLayout.astro";
 import { authenticatedMember, isAuthenticationEnabled } from "../server/auth";
 
-type PageId = "stemmen" | "mijn-20" | "ranglijst" | "cds";
+type PageId = "stemmen" | "mijn-20" | "ranglijst" | "cds" | "uitleg";
 
 interface Props {
   active: PageId;
@@ -16,6 +16,7 @@ const navigation: { id: PageId; label: string; href: string }[] = [
   { id: "mijn-20", label: "Mijn 20", href: "/mijn-20" },
   { id: "ranglijst", label: "Ranglijst", href: "/ranglijst" },
   { id: "cds", label: "De cd’s", href: "/cds" },
+  { id: "uitleg", label: "Uitleg", href: "/uitleg" },
 ];
 const authEnabled = isAuthenticationEnabled();
 const signedInMemberId = authEnabled ? authenticatedMember(Astro.request) : undefined;

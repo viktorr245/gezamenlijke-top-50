@@ -2093,11 +2093,21 @@ h1 {
   line-height: 1.03;
 }
 
-.ranking-guide-header > p:last-child {
+.ranking-guide-header > p:last-of-type {
   max-width: 720px;
   margin: 14px 0 0;
   color: var(--muted);
   font-size: 19px;
+}
+
+.ranking-guide-course {
+  display: inline-block;
+  margin-top: 18px;
+}
+
+.ranking-gate-course {
+  display: inline-block;
+  margin-top: 8px;
 }
 
 .ranking-guide-example,
@@ -3617,7 +3627,7 @@ h1 {
     z-index: 30;
     grid-row: 3;
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     height: 66px;
     padding: 0 8px;
     border-top: 1px solid var(--ink);
@@ -3630,7 +3640,7 @@ h1 {
     height: 100%;
     padding: 0;
     place-items: center;
-    font-size: 17px;
+    font-size: 16px;
   }
 
   .bottom-nav .nav-link::after {
@@ -4263,7 +4273,7 @@ h1 {
     font-size: 38px;
   }
 
-  .ranking-guide-header > p:last-child {
+  .ranking-guide-header > p:last-of-type {
     font-size: 16px;
   }
 
@@ -4674,7 +4684,7 @@ h1 {
   }
 
   .bottom-nav .nav-link {
-    font-size: 15px;
+    font-size: 13px;
   }
 
   .submission-row {

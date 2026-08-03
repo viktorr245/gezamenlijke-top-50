@@ -57,6 +57,8 @@ De uitslag gebruikt geen live Elo-score. Elo is gevoelig voor de volgorde waarin
 
 De server berekent alle 600 keuzes tegelijk met een geregulariseerd Bradley–Terry-model. Dat model schat voor ieder nummer een onderliggende sterkte op basis van de gewonnen en verloren vergelijkingen. Een zwakke statistische prior voorkomt extreme scores bij weinig informatie.
 
+De pagina **Uitleg** laat dit hele proces interactief zien zonder voorkennis: van één head-to-headkeuze en de Bradley–Terry-kans tot onzekerheid, 100.000 mogelijke ranglijsten, verwachte plek en kans op de top 50.
+
 Daarna trekt de server 100.000 steekproeven uit de benaderde posteriorverdeling. De definitieve uitkomst wordt in het serverproces gecachet zolang de nummers en stemmen gelijk blijven. Per nummer worden onder meer berekend:
 
 - de modelsterkte ten opzichte van het gemiddelde van alle honderd nummers;

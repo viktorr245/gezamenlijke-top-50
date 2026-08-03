@@ -53,6 +53,7 @@ import { members } from "../data/tracks";
         <p class="eyebrow">Leeswijzer</p>
         <h2 id="ranking-guide-title">Zo lees je deze ranglijst.</h2>
         <p>Elk zichtbaar cijfer komt uit dezelfde 600 keuzes. Hieronder zie je wat ieder getal betekent en hoe de website het precies berekent.</p>
+        <a class="text-action ranking-guide-course" href="/uitleg">Leer het hele model interactief</a>
       </header>
 
       <section class="ranking-guide-example" aria-labelledby="ranking-guide-example-title">
@@ -426,7 +427,8 @@ import { members } from "../data/tracks";
       gate.innerHTML = `
         <p class="eyebrow">Nog even geduld</p>
         <h2>${payload.status.completedVoterCount} van 5 deelnemers zijn klaar.</h2>
-        <p>Iedereen kan zelfstandig verdergaan. De definitieve top 50 verschijnt automatisch na de laatste keuze.</p>`;
+        <p>Iedereen kan zelfstandig verdergaan. De definitieve top 50 verschijnt automatisch na de laatste keuze.</p>
+        <a class="text-action ranking-gate-course" href="/uitleg">Bekijk hoe de uitslag wordt berekend</a>`;
       return;
     }
     gate.hidden = true;
