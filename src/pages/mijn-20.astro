@@ -777,7 +777,9 @@ import ProgressMarks from "../components/ProgressMarks.astro";
       form.append("audio", file);
       form.append("memberId", memberId);
       const response = await fetch(`/api/audio/${encodeURIComponent(track.id)}`, { method: "POST", body: form });
-      const payload = await response.json() as { audio?: unknown; error?: string };
+      const payload = response.headers.get("Content-Type")?.includes("application/json")
+        ? await response.json() as { audio?: unknown; error?: string }
+        : {};
       if (!response.ok || !isAudioRecord(payload.audio)) throw new Error(payload.error ?? "Uploaden is mislukt.");
       audioRecords.set(track.id, payload.audio);
       if (payload.audio.duration) {

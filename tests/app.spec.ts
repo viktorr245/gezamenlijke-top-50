@@ -12,6 +12,7 @@ import { finalizeSubmission, getSubmission, listSubmissions, saveDraftSubmission
 import { buildComparisonSchedules, campaignIdFor, castVote, finalizeVoting, listVotes, loadVotingState, undoLastVote, type VoteChoice } from "../src/server/vote-storage";
 import { ZipWriter } from "../src/server/zip-writer";
 import { POST as login } from "../src/pages/api/auth/login";
+import { POST as logout } from "../src/pages/api/auth/logout";
 
 function makeTrack(owner: MemberId, index: number): Track {
   return {
@@ -194,6 +195,20 @@ test("pincode-login maakt een ondertekende sessie en schermt andere deelnemers a
     const publicProxyResponse = await login({ request: publicProxyRequest, clientAddress: "192.168.2.64" } as Parameters<typeof login>[0]);
     expect(publicProxyResponse.status).toBe(200);
     expect(publicProxyResponse.headers.get("Set-Cookie")).toContain("; Secure");
+
+    const publicLogoutRequest = new Request("http://192.168.2.61:4321/api/auth/logout", {
+      method: "POST",
+      headers: { Origin: "https://degezamenlijke50.boe.moe", "X-Forwarded-Proto": "https" },
+    });
+    const publicLogoutResponse = await logout({ request: publicLogoutRequest } as Parameters<typeof logout>[0]);
+    expect(publicLogoutResponse.status).toBe(204);
+    expect(publicLogoutResponse.headers.get("Set-Cookie")).toContain("; Secure");
+
+    const foreignLogoutRequest = new Request("http://192.168.2.61:4321/api/auth/logout", {
+      method: "POST",
+      headers: { Origin: "https://kwaad.example" },
+    });
+    expect((await logout({ request: foreignLogoutRequest } as Parameters<typeof logout>[0])).status).toBe(403);
 
     const foreignOriginRequest = new Request("http://192.168.2.61:4321/api/auth/login", {
       method: "POST",

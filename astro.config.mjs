@@ -9,6 +9,11 @@ export default defineConfig({
     enabled: false,
   },
   output: "server",
+  // TLS eindigt bij Caddy, waardoor Astro de interne HTTP-origin ziet. Alle
+  // schrijvende API-routes controleren zelf tegen PUBLIC_ORIGIN.
+  security: {
+    checkOrigin: false,
+  },
   server: {
     host: true,
   },
