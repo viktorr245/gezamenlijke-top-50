@@ -128,11 +128,11 @@ const navigation: { id: PageId; label: string; href: string }[] = [
 
   fetch("/api/status", { headers: { Accept: "application/json" } })
     .then((response) => response.ok ? response.json() : Promise.reject())
-    .then((payload: { status?: { members?: Array<{ memberId: string; finalized: boolean; votingDone: boolean; trackCount: number }> } }) => {
+    .then((payload: { status?: { members?: Array<{ memberId: string; finalized: boolean; votingDone: boolean; trackCount: number; voteCount: number }> } }) => {
       for (const status of payload.status?.members ?? []) {
         const state = document.querySelector<HTMLElement>(`[data-member-state="${CSS.escape(status.memberId)}"]`);
         if (!state) continue;
-        state.textContent = status.votingDone ? "klaar" : status.finalized ? "ingeleverd" : `${status.trackCount}/20`;
+        state.textContent = status.votingDone ? "klaar" : status.voteCount === 120 ? "bevestigen" : status.finalized ? "ingeleverd" : `${status.trackCount}/20`;
       }
     })
     .catch(() => undefined);

@@ -97,12 +97,13 @@ export async function saveDiscLayout(
 }
 
 export async function finalizeDiscLayout(
-  tracksOrStoragePath: Track[] | string = [],
-  expectedTopTrackIds: string[] = [],
-  storagePathValue = DEFAULT_STORAGE_PATH,
+  tracks: Track[],
+  expectedTopTrackIds: string[],
+  storagePath = DEFAULT_STORAGE_PATH,
 ): Promise<DiscLayout> {
-  const tracks = Array.isArray(tracksOrStoragePath) ? tracksOrStoragePath : [];
-  const storagePath = typeof tracksOrStoragePath === "string" ? tracksOrStoragePath : storagePathValue;
+  if (tracks.length !== 50 || expectedTopTrackIds.length !== 50) {
+    throw new Error("De cd-indeling kan alleen met de volledige top 50 definitief worden gemaakt.");
+  }
   return enqueue(storagePath, async () => {
     const layout = await readLayout(storagePath);
     if (!layout) throw new Error("Er is nog geen cd-indeling om definitief te maken.");
@@ -112,9 +113,9 @@ export async function finalizeDiscLayout(
     if (expected.size !== 50 || layout.topTrackIds.some((id) => !expected.has(id))) throw new Error("De ranglijst en cd-indeling komen niet meer overeen.");
     const hasUnknownTrack = layout.discs.flat().some((id) => !tracksById.has(id));
     const overCapacity = layout.discs.some((disc) => (
-      disc.reduce((total, id) => total + (tracksById.get(id)?.duration ?? 0), 0) > 4800
+      disc.reduce((total, id) => total + (tracksById.get(id)?.duration ?? 0), 0) + Math.max(0, disc.length - 1) * 2 > 4800
     ));
-    if (tracks.length > 0 && hasUnknownTrack) throw new Error("De cd-indeling bevat een onbekend nummer.");
+    if (hasUnknownTrack) throw new Error("De cd-indeling bevat een onbekend nummer.");
     if (overCapacity) throw new Error("Minstens één cd is langer dan 80 minuten.");
     const finalized = { ...layout, updatedAt: new Date().toISOString(), finalizedAt: new Date().toISOString() };
     await writeLayout(storagePath, finalized);

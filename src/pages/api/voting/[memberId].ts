@@ -1,7 +1,7 @@
 import type { APIRoute } from "astro";
 import { isMemberId } from "../../../data/tracks";
 import { loadGroupData } from "../../../server/group-state";
-import { buildComparisonSchedules, castVote, undoLastVote } from "../../../server/vote-storage";
+import { buildComparisonSchedules, castVote, finalizeVoting, undoLastVote } from "../../../server/vote-storage";
 
 export const prerender = false;
 
@@ -29,7 +29,7 @@ async function votingPayload(memberIdValue: string) {
       left: tracksById.get(comparison.leftId),
       right: tracksById.get(comparison.rightId),
     } : null,
-    canUndo: choices.length > 0 && !group.status.votingComplete,
+    canUndo: choices.length > 0 && !memberStatus.votingDone,
   };
 }
 
@@ -54,6 +54,22 @@ export const POST: APIRoute = async ({ params, request }) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Je keuze kon niet worden opgeslagen.";
     return Response.json({ error: message }, { status: message.includes("niet meer actueel") ? 409 : 400 });
+  }
+};
+
+export const PUT: APIRoute = async ({ params, request }) => {
+  if (!sameOrigin(request)) return Response.json({ error: "Ongeldige stemaanvraag." }, { status: 403 });
+  try {
+    const memberId = params.memberId ?? "";
+    const group = await loadGroupData();
+    if (!group.status.readyForVoting) throw new Error("Er kan nog niet worden gestemd.");
+    await finalizeVoting(group.submissions, memberId);
+    return Response.json(await votingPayload(memberId), { headers: { "Cache-Control": "no-store" } });
+  } catch (error) {
+    return Response.json(
+      { error: error instanceof Error ? error.message : "Je stemmen konden niet definitief worden gemaakt." },
+      { status: 400, headers: { "Cache-Control": "no-store" } },
+    );
   }
 };
 

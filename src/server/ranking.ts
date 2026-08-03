@@ -123,8 +123,10 @@ function selectedIndices(theta: number[], count = 50): Set<number> {
 }
 
 export function calculateRanking(tracksValue: Track[], rawChoices: VoteChoice[], samples = 2000): RankedTrack[] {
+  if (!Number.isSafeInteger(samples) || samples <= 0) throw new Error("Het aantal steekproeven moet een positief geheel getal zijn.");
   const tracks = [...tracksValue].sort((a, b) => a.id.localeCompare(b.id));
   if (tracks.length !== 100) throw new Error("De ranglijst vereist precies honderd nummers.");
+  if (new Set(tracks.map((track) => track.id)).size !== tracks.length) throw new Error("Ieder nummer moet een unieke id hebben.");
   const indexById = new Map(tracks.map((track, index) => [track.id, index]));
   const choices: IndexedChoice[] = rawChoices.map((choice) => ({
     winner: indexById.get(choice.winnerId) ?? -1,

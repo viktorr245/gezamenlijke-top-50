@@ -1,7 +1,7 @@
 import { members, type MemberId, type Track } from "../data/tracks";
 import { listAudioRecords } from "./audio-storage";
 import { listSubmissions, type SubmissionIndex } from "./submission-storage";
-import { listVotes } from "./vote-storage";
+import { loadVotingState, type VotingState } from "./vote-storage";
 
 export type GroupPhase = "inzenden" | "stemmen" | "ranglijst";
 
@@ -28,7 +28,7 @@ export async function loadGroupData(): Promise<{
   submissions: Partial<SubmissionIndex>;
   tracks: Track[];
   audioIds: Set<string>;
-  voteChoices: Awaited<ReturnType<typeof listVotes>>;
+  voteChoices: VotingState["choices"];
   status: GroupStatus;
 }> {
   const [submissions, audio] = await Promise.all([listSubmissions(), listAudioRecords()]);
@@ -36,7 +36,8 @@ export async function loadGroupData(): Promise<{
   const allFinal = members.every((member) => submissions[member.id]?.finalizedAt && submissions[member.id]?.tracks.length === 20);
   const allAudio = members.every((member) => (submissions[member.id]?.tracks ?? []).every((track) => audioIds.has(track.id)));
   const readyForVoting = Boolean(allFinal && allAudio);
-  const voteChoices = readyForVoting ? await listVotes(submissions) : {};
+  const votingState: VotingState = readyForVoting ? await loadVotingState(submissions) : { choices: {}, finalizedAt: {} };
+  const voteChoices = votingState.choices;
   const statuses = members.map((member): MemberStatus => {
     const submission = submissions[member.id];
     const voteCount = voteChoices[member.id]?.length ?? 0;
@@ -46,7 +47,7 @@ export async function loadGroupData(): Promise<{
       audioCount: (submission?.tracks ?? []).filter((track) => audioIds.has(track.id)).length,
       finalized: Boolean(submission?.finalizedAt),
       voteCount,
-      votingDone: voteCount === 120,
+      votingDone: voteCount === 120 && Boolean(votingState.finalizedAt[member.id]),
     };
   });
   const votingComplete = readyForVoting && statuses.every((status) => status.votingDone);

@@ -271,10 +271,10 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     const position = playbackPositions.get(track.id) ?? 0;
     const duration = track.duration;
     return `
-      <div class="submission-audio submission-audio--ready" data-row-player data-audio-drop>
+      <div class="submission-audio submission-audio--ready" data-row-player ${finalSubmission ? "" : "data-audio-drop"}>
         <span class="audio-ready-label" title="${escapeHtml(record.originalName)}">
           <i class="ph ph-check-circle" aria-hidden="true"></i>
-          <span><strong>Audio toegevoegd</strong><small>${escapeHtml(record.originalName)} · sleep om te vervangen</small></span>
+          <span><strong>Audio toegevoegd</strong><small>${escapeHtml(record.originalName)}${finalSubmission ? "" : " · sleep om te vervangen"}</small></span>
         </span>
         <div class="row-audio-player">
           <button class="row-audio-toggle" type="button" data-row-play aria-label="Speel ${escapeHtml(track.title)} af" aria-pressed="false">
@@ -294,8 +294,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
           />
           <output class="row-audio-time" for="audio-seek-${escapeHtml(track.id)}" data-row-time>${formatDuration(Math.floor(position))} / ${formatDuration(duration)}</output>
         </div>
-        <button class="text-action audio-replace-action" type="button" data-upload-audio>Vervang</button>
-        ${input}
+        ${finalSubmission ? "" : `<button class="text-action audio-replace-action" type="button" data-upload-audio>Vervang</button>${input}`}
       </div>`;
   }
 
@@ -618,6 +617,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   }
 
   async function uploadAudio(track: Track, file: File) {
+    if (isSubmissionLocked()) return;
     if (!file.type.startsWith("audio/")) {
       setMessage("Kies een geldig audiobestand.", true);
       return;
@@ -635,8 +635,6 @@ import ProgressMarks from "../components/ProgressMarks.astro";
       await draftSaveQueue;
       const form = new FormData();
       form.append("audio", file);
-      form.append("title", track.title);
-      form.append("artist", track.artist);
       form.append("memberId", memberId);
       const response = await fetch(`/api/audio/${encodeURIComponent(track.id)}`, { method: "POST", body: form });
       const payload = await response.json() as { audio?: unknown; error?: string };

@@ -14,8 +14,10 @@ const FFMPEG_PATH = process.env.FFMPEG_PATH ?? "ffmpeg";
 const FFPROBE_PATH = process.env.FFPROBE_PATH ?? "ffprobe";
 const MAX_DISC_SECONDS = 80 * 60;
 const TRACK_GAP_SECONDS = 2;
+const PROCESS_TIMEOUT_MS = 15 * 60 * 1000;
 
 type AudioSource = { path: string; duration: number };
+type OriginalAudioAsset = NonNullable<Awaited<ReturnType<typeof getAudioAsset>>>;
 
 export type BurnPackageState = "preparing" | "ready" | "error";
 
@@ -32,6 +34,7 @@ export type BurnPackageStatus = {
 type Job = { status: BurnPackageStatus; promise: Promise<void> };
 
 const jobs = new Map<string, Job>();
+const durationCache = new Map<string, { path: string; uploadedAt: string; duration: number }>();
 
 export async function loadFinalBurnContext(): Promise<{ layout: DiscLayout; tracks: Track[] }> {
   const group = await loadGroupData();
@@ -67,17 +70,24 @@ async function run(command: string, args: string[], errorMessage: string): Promi
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
-    let stderr = "";
     child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => stdout += chunk);
-    child.stderr.on("data", (chunk: string) => {
-      if (stderr.length < 8000) stderr += chunk;
-    });
+    child.stderr.resume();
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, PROCESS_TIMEOUT_MS);
     child.once("error", (error: NodeJS.ErrnoException) => {
+      clearTimeout(timeout);
       reject(new Error(error.code === "ENOENT" ? `${command} is niet geïnstalleerd op de server.` : errorMessage));
     });
-    child.once("close", (code) => code === 0 ? resolve(stdout) : reject(new Error(stderr.trim() ? errorMessage : errorMessage)));
+    child.once("close", (code) => {
+      clearTimeout(timeout);
+      if (timedOut) return reject(new Error(`${errorMessage} Het proces duurde te lang en is gestopt.`));
+      if (code === 0) resolve(stdout);
+      else reject(new Error(errorMessage));
+    });
   });
 }
 
@@ -94,21 +104,34 @@ async function probeDuration(filePath: string): Promise<number> {
 }
 
 export async function resolveBurnAudioSources(tracks: Track[]): Promise<Map<string, AudioSource>> {
-  const assets = new Map<string, Awaited<ReturnType<typeof getAudioAsset>>>();
+  const assets = new Map<string, OriginalAudioAsset>();
   for (const track of tracks) {
     const asset = await getAudioAsset(track.id, true);
     if (!asset) throw new Error(`Het originele audiobestand van ${track.title} ontbreekt.`);
     assets.set(track.id, asset);
   }
 
-  const paths = [...new Set([...assets.values()].map((asset) => asset!.path))];
-  const durations = new Map<string, number>();
-  for (let offset = 0; offset < paths.length; offset += 4) {
-    const batch = paths.slice(offset, offset + 4);
-    const values = await Promise.all(batch.map(probeDuration));
-    batch.forEach((filePath, index) => durations.set(filePath, values[index]));
+  const activeTrackIds = new Set(assets.keys());
+  for (const trackId of durationCache.keys()) {
+    if (!activeTrackIds.has(trackId)) durationCache.delete(trackId);
   }
-  return new Map([...assets].map(([trackId, asset]) => [trackId, { path: asset!.path, duration: durations.get(asset!.path)! }]));
+  const durations = new Map<string, number>();
+  const assetsToProbe: Array<{ trackId: string; asset: OriginalAudioAsset }> = [];
+  for (const [trackId, asset] of assets) {
+    const cached = durationCache.get(trackId);
+    if (cached?.path === asset.path && cached.uploadedAt === asset.record.uploadedAt) durations.set(asset.path, cached.duration);
+    else assetsToProbe.push({ trackId, asset });
+  }
+  for (let offset = 0; offset < assetsToProbe.length; offset += 4) {
+    const batch = assetsToProbe.slice(offset, offset + 4);
+    const values = await Promise.all(batch.map(({ asset }) => probeDuration(asset.path)));
+    batch.forEach(({ trackId, asset }, index) => {
+      const duration = values[index];
+      durations.set(asset.path, duration);
+      durationCache.set(trackId, { path: asset.path, uploadedAt: asset.record.uploadedAt, duration });
+    });
+  }
+  return new Map([...assets].map(([trackId, asset]) => [trackId, { path: asset.path, duration: durations.get(asset.path)! }]));
 }
 
 export async function validateBurnCapacity(layout: DiscLayout, tracks: Track[]): Promise<Map<string, AudioSource>> {
@@ -135,11 +158,15 @@ function cueValue(value: string): string {
   return value.replaceAll('"', "'").replace(/[\r\n]+/g, " ").trim();
 }
 
+function playlistValue(value: string): string {
+  return value.replace(/[\r\n\u0000]+/g, " ").trim();
+}
+
 function metadataFiles(discNumber: number, tracks: Track[], sources: Map<string, AudioSource>, names: string[]) {
   const folder = `CD ${String(discNumber).padStart(2, "0")}`;
   const total = tracks.reduce((sum, track) => sum + sources.get(track.id)!.duration, 0);
   const playlist = ["#EXTM3U", ...tracks.flatMap((track, index) => [
-    `#EXTINF:${Math.round(sources.get(track.id)!.duration)},${track.artist} - ${track.title}`,
+    `#EXTINF:${Math.round(sources.get(track.id)!.duration)},${playlistValue(track.artist)} - ${playlistValue(track.title)}`,
     names[index],
   ]), ""].join("\n");
   const cue = [
@@ -158,7 +185,7 @@ function metadataFiles(discNumber: number, tracks: Track[], sources: Map<string,
     `${folder} — De gezamenlijke 50`,
     `${tracks.length} nummers · ${formatDuration(Math.round(total))}`,
     "",
-    ...tracks.map((track, index) => `${String(index + 1).padStart(2, "0")}. ${track.artist} — ${track.title} (${formatDuration(Math.round(sources.get(track.id)!.duration))})`),
+    ...tracks.map((track, index) => `${String(index + 1).padStart(2, "0")}. ${playlistValue(track.artist)} — ${playlistValue(track.title)} (${formatDuration(Math.round(sources.get(track.id)!.duration))})`),
     "",
     "Brand als audio-cd, niet als data-cd. Gebruik CD 01.m3u8 om de bestanden in de juiste volgorde te laden.",
     "De WAV-bestanden zijn vanuit de originele uploads omgezet naar 44,1 kHz, 16-bit stereo.",
@@ -307,7 +334,9 @@ export async function ensureBurnPackages(layout: DiscLayout, tracks: Track[], st
     }
   })();
   jobs.set(jobKey, { status, promise });
-  void promise;
+  void promise.then(() => {
+    if (status.state === "ready") jobs.delete(jobKey);
+  });
   return publicStatus(status);
 }
 

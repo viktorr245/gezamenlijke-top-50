@@ -24,9 +24,9 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
     </div>
 
     <div id="disc-content" hidden>
-      <div class="disc-tabs" role="tablist" aria-label="Kies een cd">
+      <div class="disc-tabs" role="group" aria-label="Kies een cd">
         {[0, 1, 2].map((index) => (
-          <button type="button" role="tab" data-disc-tab={index} aria-selected={index === 0 ? "true" : "false"} style={`--disc-color:${discColors[index]}`}>
+          <button type="button" data-disc-tab={index} aria-pressed={index === 0 ? "true" : "false"} style={`--disc-color:${discColors[index]}`}>
             CD {String(index + 1).padStart(2, "0")}
           </button>
         ))}
@@ -228,7 +228,7 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
       column.querySelector<HTMLElement>(".capacity-track i")!.style.width = `${Math.min(100, total / 48)}%`;
       column.querySelector<HTMLOListElement>(".disc-track-list")!.innerHTML = discs[discIndex].map((id, index) => rowMarkup(id, discIndex, index)).join("");
     });
-    tabs.forEach((tab, index) => tab.setAttribute("aria-selected", String(index === activeDisc)));
+    tabs.forEach((tab, index) => tab.setAttribute("aria-pressed", String(index === activeDisc)));
     const over = discs.some((disc) => duration(disc) > 4800);
     autoButton.hidden = !editable();
     finalizeButton.hidden = memberId !== organizerId || Boolean(finalizedAt);
@@ -239,7 +239,7 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
       ? "Deze volgorde is vastgezet en klaar om op drie cd’s te branden."
       : editable()
         ? "De verdeling is automatisch gemaakt. Pas volgorde of cd aan; wijzigingen worden direct bewaard."
-        : "Viktor beheert de conceptindeling; iedereen kan live meekijken.";
+        : "Viktor beheert de conceptindeling; vernieuw de pagina om zijn laatste wijzigingen te zien.";
     message.textContent = saveError || (over ? "Minstens één cd is langer dan 80 minuten." : "");
     message.classList.toggle("error", Boolean(saveError) || over);
   }
@@ -330,6 +330,10 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
     if (!window.confirm("De server controleert de echte audiolengtes en zet daarna de volgorde definitief vast. Hierna worden de drie brandpakketten gemaakt en kan niemand de indeling nog wijzigen. Doorgaan?")) return;
     finalizeButton.disabled = true;
     await saveQueue;
+    if (saveError) {
+      render();
+      return;
+    }
     try {
       const response = await fetch("/api/disc-layout", {
         method: "POST",

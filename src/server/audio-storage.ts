@@ -9,6 +9,7 @@ const AUDIO_DIRECTORY = path.join(STORAGE_ROOT, "audio");
 const INDEX_PATH = path.join(STORAGE_ROOT, "audio-index.json");
 const TRACK_ID_PATTERN = /^[a-zA-Z0-9_-]{1,100}$/;
 const FFMPEG_PATH = process.env.FFMPEG_PATH ?? "ffmpeg";
+const FFMPEG_TIMEOUT_MS = 15 * 60 * 1000;
 
 const AUDIO_TYPES: Record<string, string> = {
   "audio/aac": "aac",
@@ -56,7 +57,7 @@ let writeQueue: Promise<void> = Promise.resolve();
 function isStoredRecord(value: unknown): value is StoredAudioRecord {
   if (!value || typeof value !== "object") return false;
   const record = value as Partial<StoredAudioRecord>;
-  const storedNamePattern = /^[a-zA-Z0-9_-]{1,120}\.[a-z0-9]{2,5}$/;
+  const storedNamePattern = /^[a-zA-Z0-9_-]{1,180}\.[a-z0-9]{2,5}$/;
   return Boolean(
     typeof record.trackId === "string"
     && TRACK_ID_PATTERN.test(record.trackId)
@@ -146,10 +147,18 @@ async function transcodeToOpus(inputPath: string, outputPath: string) {
     process.stderr.on("data", (chunk: string) => {
       if (stderr.length < 8000) stderr += chunk;
     });
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      process.kill("SIGKILL");
+    }, FFMPEG_TIMEOUT_MS);
     process.once("error", (error: NodeJS.ErrnoException) => {
+      clearTimeout(timeout);
       reject(new Error(error.code === "ENOENT" ? "FFmpeg is niet geïnstalleerd op de server." : "De audioconversie kon niet worden gestart."));
     });
     process.once("close", (code) => {
+      clearTimeout(timeout);
+      if (timedOut) return reject(new Error("De audioconversie duurde te lang en is gestopt."));
       if (code === 0) resolve();
       else reject(new Error(stderr.trim() ? "Het bestand bevat geen bruikbare audiotrack." : "De audioconversie is mislukt."));
     });
@@ -216,8 +225,6 @@ export async function saveAudio(
   const artist = details.artist.trim().slice(0, 200);
   if (!title || !artist) throw new Error("Titel en artiest ontbreken.");
   const extension = AUDIO_TYPES[file.type];
-  const originalStoredName = `${trackId}-original.${extension}`;
-  const playbackStoredName = `${trackId}.webm`;
   const buffer = new Uint8Array(await file.arrayBuffer());
 
   return enqueue(async () => {
@@ -225,10 +232,14 @@ export async function saveAudio(
     const index = await readIndex();
     const previous = index[trackId];
     const uploadId = randomUUID();
+    const uploadKey = uploadId.replaceAll("-", "");
+    const originalStoredName = `${trackId}-${uploadKey}-o.${extension}`;
+    const playbackStoredName = `${trackId}-${uploadKey}.webm`;
     const temporaryOriginal = path.join(AUDIO_DIRECTORY, `.${trackId}-${uploadId}-original.tmp`);
     const temporaryPlayback = path.join(AUDIO_DIRECTORY, `.${trackId}-${uploadId}-playback.tmp`);
     const finalOriginal = path.join(AUDIO_DIRECTORY, originalStoredName);
     const finalPlayback = path.join(AUDIO_DIRECTORY, playbackStoredName);
+    let committed = false;
 
     try {
       await writeFile(temporaryOriginal, buffer);
@@ -236,12 +247,6 @@ export async function saveAudio(
       await rename(temporaryOriginal, finalOriginal);
       await rename(temporaryPlayback, finalPlayback);
       const playbackStat = await stat(finalPlayback);
-
-      if (previous) {
-        for (const oldName of [previous.originalStoredName, previous.playbackStoredName]) {
-          if (oldName !== originalStoredName && oldName !== playbackStoredName) await removeFile(path.join(AUDIO_DIRECTORY, oldName));
-        }
-      }
 
       const record: StoredAudioRecord = {
         trackId,
@@ -258,9 +263,19 @@ export async function saveAudio(
       };
       index[trackId] = record;
       await writeIndex(index);
+      committed = true;
+      if (previous) {
+        const oldNames = [previous.originalStoredName, previous.playbackStoredName]
+          .filter((name) => name !== originalStoredName && name !== playbackStoredName);
+        const cleanup = await Promise.allSettled(oldNames.map((name) => removeFile(path.join(AUDIO_DIRECTORY, name))));
+        if (cleanup.some((result) => result.status === "rejected")) {
+          console.error("Een oud audiobestand kon na een geslaagde vervanging niet worden opgeruimd.");
+        }
+      }
       return publicRecord(record);
     } finally {
       await Promise.all([removeFile(temporaryOriginal), removeFile(temporaryPlayback)]);
+      if (!committed) await Promise.all([removeFile(finalOriginal), removeFile(finalPlayback)]);
     }
   });
 }

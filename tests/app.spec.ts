@@ -7,7 +7,7 @@ import { finalizeDiscLayout, getDiscLayout, saveDiscLayout } from "../src/server
 import { listPinnedITunesTracks, pinITunesTrack, searchITunes } from "../src/server/itunes-cache";
 import { calculateRanking } from "../src/server/ranking";
 import { finalizeSubmission, getSubmission, listSubmissions, saveDraftSubmission, type SubmissionIndex } from "../src/server/submission-storage";
-import { buildComparisonSchedules, type VoteChoice } from "../src/server/vote-storage";
+import { buildComparisonSchedules, campaignIdFor, castVote, finalizeVoting, listVotes, loadVotingState, undoLastVote, type VoteChoice } from "../src/server/vote-storage";
 import { ZipWriter } from "../src/server/zip-writer";
 
 function makeTrack(owner: MemberId, index: number): Track {
@@ -96,15 +96,15 @@ function groupStatus(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function votingPayload(voteCount = 0) {
+function votingPayload(voteCount = 0, votingDone = false, votingComplete = false) {
   const left = makeTrack("daniel", 0);
   const right = makeTrack("keano", 0);
   return {
-    status: groupStatus({ readyForVoting: true, phase: "stemmen", finalizedCount: 5 }),
-    member: { memberId: "viktor", trackCount: 20, audioCount: 20, finalized: true, voteCount, votingDone: voteCount === 120 },
+    status: groupStatus({ readyForVoting: true, votingComplete, phase: votingComplete ? "ranglijst" : "stemmen", finalizedCount: 5 }),
+    member: { memberId: "viktor", trackCount: 20, audioCount: 20, finalized: true, voteCount, votingDone },
     comparison: voteCount < 120 ? { id: `comparison-${voteCount}`, voterId: "viktor", leftId: left.id, rightId: right.id } : null,
     tracks: voteCount < 120 ? { left, right } : null,
-    canUndo: voteCount > 0,
+    canUndo: voteCount > 0 && !votingDone,
   };
 }
 
@@ -168,6 +168,58 @@ test("de batchranglijst is deterministisch en onafhankelijk van invoervolgorde",
   expect(first.map((track) => track.id)).toEqual(second.map((track) => track.id));
   expect(first[0].top50Probability).toBeGreaterThan(first[99].top50Probability);
   expect(first.every((track) => track.rankLow <= track.expectedRank && track.expectedRank <= track.rankHigh)).toBe(true);
+  expect(() => calculateRanking(tracks, choices, 0)).toThrow(/positief geheel getal/);
+});
+
+test("stemmen worden in de vaste volgorde bewaard en kunnen één stap terug", async ({}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  const directory = await mkdtemp(path.join(tmpdir(), "top50-votes-"));
+  const storagePath = path.join(directory, "votes.json");
+  const submissions = completeSubmissions();
+  const comparison = buildComparisonSchedules(submissions).viktor[0];
+  try {
+    await castVote(submissions, "viktor", comparison.id, comparison.leftId, storagePath);
+    expect(await listVotes(submissions, storagePath)).toMatchObject({ viktor: [{ winnerId: comparison.leftId }] });
+    await expect(castVote(submissions, "viktor", comparison.id, comparison.leftId, storagePath)).rejects.toThrow(/niet meer actueel/);
+    expect((await undoLastVote(submissions, "viktor", storagePath))?.id).toBe(comparison.id);
+    expect((await listVotes(submissions, storagePath)).viktor).toHaveLength(0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("120 keuzes worden pas definitief na een aparte bevestiging", async ({}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  const directory = await mkdtemp(path.join(tmpdir(), "top50-vote-finalization-"));
+  const storagePath = path.join(directory, "votes.json");
+  const submissions = completeSubmissions();
+  const choices: VoteChoice[] = buildComparisonSchedules(submissions).viktor.map((comparison, index) => ({
+    ...comparison,
+    winnerId: comparison.leftId,
+    loserId: comparison.rightId,
+    chosenAt: new Date(Date.UTC(2026, 7, 3, 0, 0, index)).toISOString(),
+  }));
+  try {
+    await writeFile(storagePath, JSON.stringify({
+      version: 2,
+      campaignId: campaignIdFor(submissions),
+      choices: { viktor: choices },
+      finalizedAt: {},
+    }));
+    expect((await loadVotingState(submissions, storagePath)).finalizedAt.viktor).toBeUndefined();
+    await finalizeVoting(submissions, "viktor", storagePath);
+    expect((await loadVotingState(submissions, storagePath)).finalizedAt.viktor).toBeTruthy();
+    await expect(undoLastVote(submissions, "viktor", storagePath)).rejects.toThrow(/definitief/);
+
+    await writeFile(storagePath, JSON.stringify({
+      version: 1,
+      campaignId: campaignIdFor(submissions),
+      choices: { viktor: choices },
+    }));
+    expect((await loadVotingState(submissions, storagePath)).finalizedAt.viktor).toBe(choices[119].chosenAt);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("inzendingen bewaren concepten, blokkeren groepsdubbelen en vergrendelen definitief", async ({}, testInfo) => {
@@ -180,6 +232,8 @@ test("inzendingen bewaren concepten, blokkeren groepsdubbelen en vergrendelen de
     expect(draft.tracks).toHaveLength(3);
     const duplicate = { ...viktorTracks[0], owner: "daniel" as const };
     await expect(saveDraftSubmission("daniel", [duplicate], storagePath)).rejects.toThrow(/al in de lijst/);
+    const reusedId = { ...makeTrack("daniel", 19), id: viktorTracks[1].id, title: "Andere titel" };
+    await expect(saveDraftSubmission("daniel", [reusedId], storagePath)).rejects.toThrow(/nummer-id/);
     await saveDraftSubmission("daniel", [makeTrack("daniel", 0)], storagePath);
     expect((await listSubmissions(storagePath)).daniel?.tracks).toHaveLength(1);
     const final = await finalizeSubmission("viktor", viktorTracks, storagePath);
@@ -204,6 +258,22 @@ test("een cd-indeling bevat exact de top 50 en wordt definitief vergrendeld", as
     expect(final.finalizedAt).not.toBeNull();
     expect((await getDiscLayout(storagePath))?.discs.flat()).toHaveLength(50);
     await expect(saveDiscLayout(discs, ids, storagePath)).rejects.toThrow(/al definitief/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("een cd-indeling telt ook de stiltes tussen nummers mee", async ({}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  const directory = await mkdtemp(path.join(tmpdir(), "top50-disc-gaps-"));
+  const storagePath = path.join(directory, "layout.json");
+  const tracks = members.flatMap((member) => Array.from({ length: 10 }, (_, index) => ({ ...makeTrack(member.id, index), duration: 282 })));
+  const ids = tracks.map((track) => track.id);
+  const discs = [ids.slice(0, 17), ids.slice(17, 34), ids.slice(34)];
+  try {
+    await saveDiscLayout(discs, ids, storagePath);
+    await expect(finalizeDiscLayout(tracks, ids, storagePath)).rejects.toThrow(/langer dan 80 minuten/);
+    expect((await getDiscLayout(storagePath))?.finalizedAt).toBeNull();
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -257,6 +327,17 @@ test("iTunes-zoekresultaten worden gecachet en volledig vastgezet", async ({}, t
     const stored = JSON.parse(await readFile(cachePath, "utf8"));
     expect(stored.records["12345"].raw.releaseDate).toBe("2025-01-01T00:00:00Z");
     expect(stored.records["12345"].pinnedAt).toBeTruthy();
+
+    stored.queries = Object.fromEntries(Array.from({ length: 500 }, (_, index) => [`toekomst-${index}`, {
+      query: `toekomst ${index}`,
+      fetchedAt: "2099-01-01T00:00:00.000Z",
+      sourceIds: ["12345"],
+    }]));
+    await writeFile(cachePath, JSON.stringify(stored));
+    expect((await searchITunes("nieuwe zoekopdracht", fetcher, cachePath)).tracks).toHaveLength(1);
+    const pruned = JSON.parse(await readFile(cachePath, "utf8"));
+    expect(Object.keys(pruned.queries)).toHaveLength(500);
+    expect(pruned.queries["nieuwe zoekopdracht"]).toBeTruthy();
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -282,6 +363,15 @@ test("audio bewaart het origineel en maakt een Opus-afspeelbestand", async ({}, 
     expect(original?.mimeType).toBe("audio/wav");
     expect(playback?.mimeType).toBe("audio/webm");
     expect(await readFile(original!.path)).toEqual(wav);
+
+    await storage.saveAudio("audio-test", new File([Uint8Array.from(wav)], "vervanging.wav", { type: "audio/wav" }), {
+      title: "Testnummer",
+      artist: "Testartiest",
+    });
+    const replacement = await storage.getAudioAsset("audio-test", true);
+    expect(replacement?.path).not.toBe(original?.path);
+    await expect(readFile(original!.path)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(replacement!.path)).toEqual(wav);
   } finally {
     if (previousStorage === undefined) delete process.env.STORAGE_DIR;
     else process.env.STORAGE_DIR = previousStorage;
@@ -329,6 +419,34 @@ test("stemmen gebruikt 120 markeringen, centrale audio en ondersteunt één stap
   await expect(page.locator("#undo-vote")).toBeVisible();
   await page.locator("#undo-vote").click();
   await expect(page.locator("#vote-count")).toHaveText("7");
+});
+
+test("na keuze 120 volgt eerst een expliciete definitieve bevestiging", async ({ page }) => {
+  let voteCount = 120;
+  let finalized = false;
+  let finalizeRequests = 0;
+  await page.route("**/api/voting/viktor", async (route) => {
+    if (route.request().method() === "DELETE") voteCount -= 1;
+    if (route.request().method() === "POST") voteCount += 1;
+    if (route.request().method() === "PUT") {
+      finalized = true;
+      finalizeRequests += 1;
+    }
+    await route.fulfill({ json: votingPayload(voteCount, finalized) });
+  });
+
+  await page.goto("/stemmen");
+  await expect(page.getByRole("heading", { name: "Je hebt alle 120 keuzes gemaakt." })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Mijn stemmen definitief maken" })).toBeVisible();
+  await page.getByRole("button", { name: "Laatste keuze aanpassen" }).click();
+  await expect(page.locator("#vote-count")).toHaveText("119");
+  await expect(page.locator("#vote-grid")).toBeVisible();
+
+  await page.locator('[data-choice="left"] [data-vote]').click();
+  await expect(page.getByRole("heading", { name: "Je hebt alle 120 keuzes gemaakt." })).toBeVisible();
+  await page.getByRole("button", { name: "Mijn stemmen definitief maken" }).click();
+  await expect(page.getByRole("heading", { name: "Jouw stemmen staan vast." })).toBeVisible();
+  expect(finalizeRequests).toBe(1);
 });
 
 test("Mijn 20 zoekt, bewaart centraal en maakt audio duidelijk verplicht", async ({ page, isMobile }) => {
@@ -404,6 +522,34 @@ test("een nummer uit een concept verwijderen ruimt beide server-audiobestanden o
   await expect(page.locator(".submission-row")).toHaveCount(0);
   await expect.poll(() => audioDeleted).toBe(true);
   await expect.poll(() => draft.length).toBe(0);
+});
+
+test("audio van een definitieve inzending kan in de interface niet worden vervangen", async ({ page }) => {
+  const track = { ...makeTrack("viktor", 0), id: "itunes-100000", source: "itunes" as const, sourceId: "100000" };
+  await page.route("**/api/submissions/viktor", (route) => route.fulfill({ json: { submission: {
+    memberId: "viktor",
+    tracks: [track],
+    updatedAt: "2026-08-03T12:00:00.000Z",
+    finalizedAt: "2026-08-03T12:00:00.000Z",
+  } } }));
+  await page.route("**/api/audio", (route) => route.fulfill({ json: { audio: {
+    [track.id]: {
+      trackId: track.id,
+      title: track.title,
+      artist: track.artist,
+      originalName: "origineel.flac",
+      mimeType: "audio/webm",
+      size: 1234,
+      uploadedAt: "2026-08-03T12:00:00.000Z",
+      url: `/api/audio/${track.id}`,
+    },
+  } } }));
+
+  await page.goto("/mijn-20");
+  await expect(page.locator(".submission-row")).toHaveCount(1);
+  await expect(page.locator("[data-row-play]")).toBeVisible();
+  await expect(page.locator("[data-upload-audio], [data-audio-file], [data-audio-drop]")).toHaveCount(0);
+  await expect(page.locator("#save-submission")).toHaveText("Inzending is definitief");
 });
 
 test("de definitieve ranglijst toont alle 100 nummers en de grens", async ({ page, isMobile }) => {
@@ -497,6 +643,37 @@ test("de cd-pagina verdeelt automatisch, ordent toegankelijk en laat alleen Vikt
   await expect(page.locator("#burn-packages")).toBeVisible();
   await expect(page.locator(".burn-download")).toHaveCount(4);
   await expect(page.locator(".burn-download--all")).toContainText("2 GB");
+});
+
+test("een mislukte cd-save kan geen oudere indeling definitief maken", async ({ page }) => {
+  const topTracks = members.flatMap((member) => Array.from({ length: 10 }, (_, index) => makeTrack(member.id, index)));
+  const ids = topTracks.map((track) => track.id);
+  const layout = {
+    discs: [ids.slice(0, 17), ids.slice(17, 34), ids.slice(34)],
+    topTrackIds: ids,
+    updatedAt: "2026-08-03T12:00:00.000Z",
+    finalizedAt: null,
+  };
+  const status = groupStatus({ votingComplete: true, completedVoterCount: 5, finalizedCount: 5, phase: "ranglijst" });
+  let finalizeRequests = 0;
+  await page.route("**/api/disc-layout", async (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: { status, layout, tracks: topTracks, organizerId: "viktor" } });
+    if (route.request().method() === "PUT") {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return route.fulfill({ status: 500, json: { error: "Opslaan mislukt." } });
+    }
+    finalizeRequests += 1;
+    return route.fulfill({ json: { layout: { ...layout, finalizedAt: new Date().toISOString() } } });
+  });
+
+  await page.goto("/cds");
+  const select = page.locator(".disc-track [data-move-select]").first();
+  await select.selectOption("1");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("#finalize-discs").click();
+  await expect(page.locator("#disc-message")).toContainText("Opslaan mislukt.");
+  expect(finalizeRequests).toBe(0);
+  await expect(page.locator("#disc-eyebrow")).toHaveText("Conceptindeling");
 });
 
 test("alle pagina’s houden document-scroll en horizontale overflow tegen", async ({ page }) => {

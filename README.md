@@ -25,14 +25,15 @@ Stemmen opent zodra alle vijf inzendingen compleet en definitief zijn. Iedere de
 
 - Er is één doorlopende lijst van 120 vergelijkingen; er zijn geen rondes.
 - De voortgang staat op de server, dus je kunt stoppen en later op hetzelfde of een ander apparaat verdergaan.
-- De laatste keuze kan worden teruggenomen zolang de hele groep nog niet klaar is.
-- De ranglijst blijft verborgen totdat alle vijf deelnemers klaar zijn. Zo beïnvloedt een tussenstand latere keuzes niet.
+- Na keuze 120 krijg je eerst een controlescherm. Daar kun je de laatste keuze aanpassen of je stemmen definitief maken.
+- Totdat je zelf bevestigt, kun je keuzes stap voor stap terugnemen. Na bevestigen staan jouw stemmen vast.
+- De ranglijst blijft verborgen totdat alle vijf deelnemers hun 120 keuzes hebben bevestigd. Zo beïnvloedt een tussenstand latere keuzes niet.
 
 Het schema is vooraf en deterministisch opgebouwd. Per deelnemer komt ieder van de tachtig toegestane nummers precies drie keer voorbij. Over de hele groep wordt ieder nummer twaalf keer beoordeeld: tegen iedere andere inzending drie keer, zes keer links en zes keer rechts. Dezelfde combinatie van twee nummers komt niet opnieuw voor.
 
 ### 3. Ranglijst en cd-indeling
 
-Na de laatste van in totaal 600 keuzes berekent de server de volledige ranglijst. De vijftig geselecteerde nummers staan boven **De streep**. Daarna:
+Na in totaal 600 keuzes en vijf definitieve bevestigingen berekent de server de volledige ranglijst. De vijftig geselecteerde nummers staan boven **De streep**. Daarna:
 
 1. leest de server met FFprobe de werkelijke lengte van de originele audiobestanden;
 2. verdeelt de website de top 50 automatisch over drie cd’s, steeds met het langste resterende nummer op de op dat moment kortste cd;
@@ -79,6 +80,7 @@ FFmpeg voert de conversies uit en FFprobe leest vóór het definitief maken de w
 Zoeken gebruikt de gratis iTunes Search API van Apple en heeft geen API-sleutel nodig. De browser vraagt Apple nooit rechtstreeks aan: alle verzoeken lopen via de eigen server.
 
 - Zoekresultaten blijven zeven dagen in de schijfcache.
+- De oudste niet-vastgezette zoekopdrachten worden opgeruimd zodra de cache meer dan 500 zoekopdrachten bevat.
 - Gelijktijdige gelijke zoekopdrachten worden samengevoegd tot één Apple-verzoek.
 - Bij een tijdelijke Apple-storing mag een oudere cacheversie worden gebruikt.
 - Zodra een nummer wordt toegevoegd, bewaart de server zowel de gebruikte velden als het volledige oorspronkelijke Apple-record permanent in de lokale catalogus.
@@ -147,7 +149,7 @@ Gebruik deze versie daarom op een vertrouwde privéserver voor de vijf deelnemer
 | --- | --- |
 | `GET /api/status` | fase en voortgang van alle deelnemers |
 | `GET/PUT/POST /api/submissions/:memberId` | concept laden, concept bewaren, definitief maken |
-| `GET/POST/DELETE /api/voting/:memberId` | huidige vergelijking, keuze opslaan, laatste keuze terugnemen |
+| `GET/POST/PUT/DELETE /api/voting/:memberId` | huidige vergelijking laden, keuze opslaan, stemmen definitief maken of laatste keuze terugnemen |
 | `GET /api/ranking` | definitieve batchranglijst zodra iedereen klaar is |
 | `GET/PUT/POST /api/disc-layout` | indeling laden, automatisch bewaren, definitief maken |
 | `GET/POST /api/burn-packages` | voortgang laden of pakketopbouw opnieuw starten |
@@ -172,7 +174,7 @@ De tests controleren onder meer:
 - determinisme en invoervolgorde-onafhankelijkheid van de batchranglijst;
 - centrale conceptopslag, groepsbrede duplicaten en definitief vergrendelen;
 - navigatie en deelnemerkeuze op desktop en mobiel;
-- de 120 voortgangsmarkeringen, stemmen en terugnemen;
+- de 120 voortgangsmarkeringen, stemmen, terugnemen en expliciet definitief maken;
 - zoeken, audioverplichting en het ontbreken van een betekenisloze inzendvolgorde;
 - alle honderd ranglijstregels en de grens na nummer 50;
 - automatische cd-verdeling, toegankelijke verplaatsing en definitief maken;

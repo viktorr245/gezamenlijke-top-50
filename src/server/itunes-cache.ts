@@ -7,6 +7,7 @@ const STORAGE_ROOT = path.resolve(process.env.STORAGE_DIR ?? process.env.AUDIO_S
 const DEFAULT_CACHE_PATH = path.join(STORAGE_ROOT, "itunes-cache.json");
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const SEARCH_LIMIT = 8;
+const MAX_CACHED_QUERIES = 500;
 
 type ITunesResult = Record<string, unknown> & {
   kind?: string;
@@ -177,7 +178,21 @@ function tracksForQuery(cache: ITunesCache, query: CachedQuery): Track[] {
 
 function isFresh(query: CachedQuery): boolean {
   const fetchedAt = Date.parse(query.fetchedAt);
-  return Number.isFinite(fetchedAt) && Date.now() - fetchedAt < CACHE_TTL_MS;
+  const age = Date.now() - fetchedAt;
+  return Number.isFinite(fetchedAt) && age >= 0 && age < CACHE_TTL_MS;
+}
+
+function pruneCache(cache: ITunesCache, protectedKey: string) {
+  const newestQueries = Object.entries(cache.queries)
+    .filter(([key]) => key !== protectedKey)
+    .sort(([, first], [, second]) => (Date.parse(second.fetchedAt) || 0) - (Date.parse(first.fetchedAt) || 0));
+  const retainedOtherQueries = MAX_CACHED_QUERIES - (cache.queries[protectedKey] ? 1 : 0);
+  for (const [key] of newestQueries.slice(retainedOtherQueries)) delete cache.queries[key];
+
+  const referenced = new Set(Object.values(cache.queries).flatMap((query) => query.sourceIds));
+  for (const [sourceId, record] of Object.entries(cache.records)) {
+    if (!record.pinnedAt && !referenced.has(sourceId)) delete cache.records[sourceId];
+  }
 }
 
 async function fetchITunes(query: string, fetcher: Fetcher): Promise<ITunesResult[]> {
@@ -235,6 +250,7 @@ export async function searchITunes(
           sourceIds.push(track.sourceId);
         }
         latest.queries[key] = { query: trimmed, fetchedAt: now, sourceIds };
+        pruneCache(latest, key);
         await writeCache(cachePath, latest);
         return { tracks: sourceIds.map((sourceId) => latest.records[sourceId].track), cacheStatus: "MISS" };
       });

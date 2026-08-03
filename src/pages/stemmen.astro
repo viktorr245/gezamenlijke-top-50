@@ -165,21 +165,30 @@ import ProgressMarks from "../components/ProgressMarks.astro";
         <h2>Iedereen maakt eerst zijn 20 compleet.</h2>
         <p>${next.status.finalizedCount} van 5 inzendingen zijn definitief. Stemmen opent automatisch zodra alle honderd audiobestanden klaarstaan.</p>
         <ul>${missing.map((status) => `<li><strong>${status.memberId[0].toUpperCase() + status.memberId.slice(1)}</strong><span>${status.trackCount}/20 nummers · ${status.audioCount}/20 audio</span></li>`).join("")}</ul>`;
+    } else if (next.member.voteCount === 120 && !next.member.votingDone) {
+      gate.innerHTML = `
+        <p class="eyebrow">Controle</p>
+        <h2>Je hebt alle 120 keuzes gemaakt.</h2>
+        <p>Pas eventueel je laatste keuze aan. Maak je stemmen pas definitief als alles klopt; daarna kun je ze niet meer wijzigen.</p>
+        <div class="vote-review-actions">
+          <button class="outlined-action" type="button" data-finalize-voting>Mijn stemmen definitief maken</button>
+          <button class="text-action" type="button" data-review-undo><i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i> Laatste keuze aanpassen</button>
+        </div>`;
     } else {
       gate.innerHTML = `
-        <p class="eyebrow">Klaar</p>
-        <h2>Jouw 120 keuzes zijn opgeslagen.</h2>
-        <p>${next.status.votingComplete ? "Iedereen is klaar. De definitieve ranglijst staat nu vast." : "Je hoeft niets meer te doen; de anderen kunnen in hun eigen tijd afronden."}</p>
+        <p class="eyebrow">Definitief</p>
+        <h2>Jouw stemmen staan vast.</h2>
+        <p>${next.status.votingComplete ? "Iedereen heeft bevestigd. De definitieve ranglijst staat nu vast." : "Je hoeft niets meer te doen; de anderen kunnen in hun eigen tijd afronden en bevestigen."}</p>
         <a class="outlined-action gate-link" href="/ranglijst">Bekijk de ranglijst</a>`;
     }
   }
 
   function render(next: VotingPayload) {
-    payload = next;
     stopAudio(true);
+    payload = next;
     count.textContent = String(next.member.voteCount);
     marks.forEach((mark, index) => mark.classList.toggle("complete", index < next.member.voteCount));
-    undoButton.hidden = !next.canUndo;
+    undoButton.hidden = !next.canUndo || (next.member.voteCount === 120 && !next.member.votingDone);
     message.textContent = "";
     if (!next.status.readyForVoting || !next.comparison || !next.tracks) {
       renderGate(next);
@@ -203,7 +212,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     }
   }
 
-  async function request(method: "POST" | "DELETE", body?: unknown) {
+  async function request(method: "POST" | "PUT" | "DELETE", body?: unknown) {
     const response = await fetch(`/api/voting/${memberId}`, {
       method,
       headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -248,15 +257,30 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     if (activeCard) setPosition(activeCard, audio.currentTime, audio.duration);
   });
   audio.addEventListener("ended", () => {
-    if (activeCard) setPosition(activeCard, 0, audio.duration);
-    stopAudio();
+    stopAudio(true);
   });
-  undoButton.addEventListener("click", async () => {
+  async function undo() {
     if (busy) return;
     busy = true;
     try { render(await request("DELETE")); }
     catch (error) { message.textContent = error instanceof Error ? error.message : "Terugdraaien mislukt."; }
     finally { busy = false; }
+  }
+  undoButton.addEventListener("click", undo);
+  gate.addEventListener("click", async (event) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("[data-review-undo]")) return undo();
+    const finalizeButton = target.closest<HTMLButtonElement>("[data-finalize-voting]");
+    if (!finalizeButton || busy) return;
+    busy = true;
+    finalizeButton.disabled = true;
+    finalizeButton.textContent = "Definitief maken…";
+    try { render(await request("PUT")); }
+    catch (error) {
+      message.textContent = error instanceof Error ? error.message : "Definitief maken mislukt.";
+      finalizeButton.disabled = false;
+      finalizeButton.textContent = "Mijn stemmen definitief maken";
+    } finally { busy = false; }
   });
 
   fetch(`/api/voting/${memberId}`, { headers: { Accept: "application/json" } })

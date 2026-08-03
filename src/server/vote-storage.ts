@@ -21,10 +21,13 @@ export type VoteChoice = Comparison & {
 };
 
 type VoteDocument = {
-  version: 1;
+  version: 2;
   campaignId: string;
   choices: Partial<Record<MemberId, VoteChoice[]>>;
+  finalizedAt: Partial<Record<MemberId, string>>;
 };
+
+export type VotingState = Pick<VoteDocument, "choices" | "finalizedAt">;
 
 const writeQueues = new Map<string, Promise<void>>();
 
@@ -170,18 +173,28 @@ function safeChoice(value: unknown): VoteChoice | undefined {
 
 async function readDocument(campaignId: string, storagePath: string): Promise<VoteDocument> {
   try {
-    const parsed = JSON.parse(await readFile(storagePath, "utf8")) as Partial<VoteDocument>;
-    if (parsed.version !== 1 || parsed.campaignId !== campaignId || !parsed.choices || typeof parsed.choices !== "object") {
-      return { version: 1, campaignId, choices: {} };
+    const parsed = JSON.parse(await readFile(storagePath, "utf8")) as {
+      version?: 1 | 2;
+      campaignId?: string;
+      choices?: Partial<Record<MemberId, unknown>>;
+      finalizedAt?: Partial<Record<MemberId, unknown>>;
+    };
+    if ((parsed.version !== 1 && parsed.version !== 2) || parsed.campaignId !== campaignId || !parsed.choices || typeof parsed.choices !== "object") {
+      return { version: 2, campaignId, choices: {}, finalizedAt: {} };
     }
     const choices: VoteDocument["choices"] = {};
+    const finalizedAt: VoteDocument["finalizedAt"] = {};
     for (const member of members) {
       const values = parsed.choices[member.id];
-      if (Array.isArray(values)) choices[member.id] = values.map(safeChoice).filter((choice): choice is VoteChoice => Boolean(choice));
+      if (!Array.isArray(values)) continue;
+      const safeChoices = values.map(safeChoice).filter((choice): choice is VoteChoice => Boolean(choice));
+      choices[member.id] = safeChoices;
+      const storedFinalizedAt = parsed.version === 2 ? parsed.finalizedAt?.[member.id] : safeChoices.length >= 120 ? safeChoices[119]?.chosenAt : undefined;
+      if (typeof storedFinalizedAt === "string" && Number.isFinite(Date.parse(storedFinalizedAt))) finalizedAt[member.id] = storedFinalizedAt;
     }
-    return { version: 1, campaignId, choices };
+    return { version: 2, campaignId, choices, finalizedAt };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, campaignId, choices: {} };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: 2, campaignId, choices: {}, finalizedAt: {} };
     throw error;
   }
 }
@@ -216,13 +229,22 @@ function validChoicePrefix(choices: VoteChoice[], schedule: Comparison[]): VoteC
   return result;
 }
 
-export async function listVotes(submissions: Partial<SubmissionIndex>, storagePath = DEFAULT_STORAGE_PATH): Promise<VoteDocument["choices"]> {
+export async function loadVotingState(submissions: Partial<SubmissionIndex>, storagePath = DEFAULT_STORAGE_PATH): Promise<VotingState> {
   const document = await readDocument(campaignIdFor(submissions), storagePath);
   const schedules = buildComparisonSchedules(submissions);
-  return Object.fromEntries(members.map((member) => [
+  const choices = Object.fromEntries(members.map((member) => [
     member.id,
     validChoicePrefix(document.choices[member.id] ?? [], schedules[member.id]),
   ])) as VoteDocument["choices"];
+  const finalizedAt = Object.fromEntries(members.flatMap((member) => {
+    const value = document.finalizedAt[member.id];
+    return choices[member.id]?.length === 120 && value ? [[member.id, value]] : [];
+  })) as VoteDocument["finalizedAt"];
+  return { choices, finalizedAt };
+}
+
+export async function listVotes(submissions: Partial<SubmissionIndex>, storagePath = DEFAULT_STORAGE_PATH): Promise<VoteDocument["choices"]> {
+  return (await loadVotingState(submissions, storagePath)).choices;
 }
 
 export async function castVote(
@@ -239,10 +261,12 @@ export async function castVote(
   return enqueue(storagePath, async () => {
     const document = await readDocument(campaignId, storagePath);
     const choices = validChoicePrefix(document.choices[memberId] ?? [], schedules[memberId]);
+    if (choices.length === 120 && document.finalizedAt[memberId]) throw new Error("Je stemmen zijn al definitief gemaakt.");
     const comparison = schedules[memberId][choices.length];
     if (!comparison) throw new Error("Je hebt alle vergelijkingen al afgerond.");
     if (comparison.id !== comparisonId) throw new Error("Deze vergelijking is niet meer actueel. Vernieuw de pagina.");
     if (winnerId !== comparison.leftId && winnerId !== comparison.rightId) throw new Error("Ongeldige keuze.");
+    delete document.finalizedAt[memberId];
     const choice: VoteChoice = {
       ...comparison,
       winnerId,
@@ -267,12 +291,35 @@ export async function undoLastVote(
   const schedules = buildComparisonSchedules(submissions);
   return enqueue(storagePath, async () => {
     const document = await readDocument(campaignId, storagePath);
-    const everyoneDone = members.every((member) => validChoicePrefix(document.choices[member.id] ?? [], schedules[member.id]).length === 120);
-    if (everyoneDone) throw new Error("De eindranglijst staat vast; stemmen kunnen niet meer worden gewijzigd.");
     const choices = validChoicePrefix(document.choices[memberId] ?? [], schedules[memberId]);
+    if (choices.length === 120 && document.finalizedAt[memberId]) throw new Error("Je stemmen zijn definitief en kunnen niet meer worden gewijzigd.");
     const removed = choices.pop();
+    delete document.finalizedAt[memberId];
     document.choices[memberId] = choices;
     await writeDocument(storagePath, document);
     return removed;
+  });
+}
+
+export async function finalizeVoting(
+  submissions: Partial<SubmissionIndex>,
+  memberIdValue: string,
+  storagePath = DEFAULT_STORAGE_PATH,
+): Promise<string> {
+  if (!isMemberId(memberIdValue)) throw new Error("Onbekende deelnemer.");
+  const memberId = memberIdValue;
+  const campaignId = campaignIdFor(submissions);
+  const schedules = buildComparisonSchedules(submissions);
+  return enqueue(storagePath, async () => {
+    const document = await readDocument(campaignId, storagePath);
+    const choices = validChoicePrefix(document.choices[memberId] ?? [], schedules[memberId]);
+    if (choices.length !== 120) throw new Error("Maak eerst alle 120 vergelijkingen af.");
+    const existing = document.finalizedAt[memberId];
+    if (existing) return existing;
+    const finalizedAt = new Date().toISOString();
+    document.choices[memberId] = choices;
+    document.finalizedAt[memberId] = finalizedAt;
+    await writeDocument(storagePath, document);
+    return finalizedAt;
   });
 }

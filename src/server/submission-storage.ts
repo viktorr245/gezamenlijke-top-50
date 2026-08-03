@@ -161,12 +161,17 @@ function validateTracks(values: unknown[], memberId: MemberId): Track[] {
 
 function assertNoGroupDuplicates(document: SubmissionDocument, memberId: MemberId, tracks: Track[]) {
   const claimed = new Map<string, MemberId>();
+  const claimedIds = new Set<string>();
   for (const member of members) {
     if (member.id === memberId) continue;
-    for (const track of document.submissions[member.id]?.tracks ?? []) claimed.set(duplicateKey(track), member.id);
+    for (const track of document.submissions[member.id]?.tracks ?? []) {
+      claimed.set(duplicateKey(track), member.id);
+      claimedIds.add(track.id);
+    }
   }
   const duplicate = tracks.find((track) => claimed.has(duplicateKey(track)));
   if (duplicate) throw new Error(`${duplicate.title} staat al in de lijst van iemand anders.`);
+  if (tracks.some((track) => claimedIds.has(track.id))) throw new Error("Een nummer-id wordt al door iemand anders gebruikt.");
 }
 
 export async function listSubmissions(storagePath = DEFAULT_STORAGE_PATH): Promise<Partial<SubmissionIndex>> {

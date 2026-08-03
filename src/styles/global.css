@@ -106,6 +106,7 @@ input:disabled {
 .app-shell {
   display: grid;
   grid-template-columns: 238px minmax(0, 1fr);
+  height: 100vh;
   height: 100dvh;
   overflow: hidden;
 }
@@ -711,6 +712,22 @@ h1 {
   margin-top: 28px;
   padding: 0 24px;
   place-items: center;
+}
+
+.vote-review-actions {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-top: 28px;
+}
+
+.vote-review-actions .outlined-action {
+  min-height: 62px;
+  padding: 0 24px;
+}
+
+.vote-review-actions .text-action {
+  min-height: 44px;
 }
 
 .vote-footer-actions {
@@ -2745,7 +2762,7 @@ h1 {
     border-right: 0;
   }
 
-  .disc-tabs button[aria-selected="true"]::after {
+  .disc-tabs button[aria-pressed="true"]::after {
     position: absolute;
     right: 0;
     bottom: -1px;
@@ -2822,6 +2839,17 @@ h1 {
   .vote-gate h2,
   .ranking-gate h2,
   .disc-gate h2 { font-size: 30px; }
+
+  .vote-review-actions {
+    display: grid;
+    width: 100%;
+    gap: 14px;
+  }
+
+  .vote-review-actions .outlined-action {
+    width: 100%;
+    padding: 10px 16px;
+  }
 
   .move-track i {
     font-size: 18px;
