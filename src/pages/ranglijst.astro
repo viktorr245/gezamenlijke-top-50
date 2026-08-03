@@ -1,0 +1,122 @@
+---
+import AppShell from "../components/AppShell.astro";
+import { members } from "../data/tracks";
+---
+
+<AppShell active="ranglijst" title="Ranglijst">
+  <section class="ranking-page" aria-labelledby="ranking-title">
+    <div class="ranking-heading">
+      <div>
+        <p class="eyebrow">Ranglijst</p>
+        <h1 id="ranking-title">Zo ligt de ranglijst erbij.</h1>
+        <p class="heading-copy" id="ranking-copy">De uitslag verschijnt zodra iedereen klaar is.</p>
+      </div>
+      <div class="group-status" aria-label="Voortgang van de groep">
+        <p><strong id="ready-count">0</strong><span>van 5 klaar</span></p>
+        <div aria-hidden="true" id="ready-squares">
+          {members.map((member) => <span class="status-square" data-status-member={member.id} style={`--status-color:${member.color}`}></span>)}
+        </div>
+      </div>
+    </div>
+
+    <div class="ranking-gate" id="ranking-gate" role="status">
+      <span class="search-loader" aria-hidden="true"></span>
+      <h2>Ranglijst laden…</h2>
+    </div>
+
+    <div id="ranking-content" hidden>
+      <div class="ranking-toolbar"><h2>Alle 100 nummers</h2></div>
+      <div class="ranking-columns" aria-hidden="true">
+        <span>#</span><span>Nummer</span><span>Ingebracht door</span><span>Kans top 50</span>
+      </div>
+      <ol class="ranking-list" id="ranking-list"></ol>
+    </div>
+  </section>
+</AppShell>
+
+<script>
+  import { getMember, type Track } from "../data/tracks";
+
+  type RankedTrack = Track & {
+    rank: number;
+    selected: boolean;
+    top50Probability: number;
+    expectedRank: number;
+    rankLow: number;
+    rankHigh: number;
+    winRate: number;
+    leaveOneOutSelections: number;
+  };
+
+  type RankingPayload = {
+    status: {
+      phase: string;
+      votingComplete: boolean;
+      completedVoterCount: number;
+      finalizedCount: number;
+      members: Array<{ memberId: string; votingDone: boolean; voteCount: number }>;
+    };
+    ranking: RankedTrack[] | null;
+  };
+
+  const gate = document.querySelector<HTMLElement>("#ranking-gate")!;
+  const content = document.querySelector<HTMLElement>("#ranking-content")!;
+  const list = document.querySelector<HTMLOListElement>("#ranking-list")!;
+  const copy = document.querySelector<HTMLElement>("#ranking-copy")!;
+  const count = document.querySelector<HTMLElement>("#ready-count")!;
+
+  function escapeHtml(value: unknown): string {
+    return String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character]!);
+  }
+
+  function rowMarkup(track: RankedTrack) {
+    const member = getMember(track.owner);
+    const stability = track.leaveOneOutSelections === 5 ? "Stabiele keuze" : `${track.leaveOneOutSelections} van 5 controles in de top 50`;
+    const expectedRank = track.expectedRank.toLocaleString("nl-NL", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+    return `
+      <li class="ranking-row ${track.selected ? "" : "outside"}" data-rank="${track.rank}" title="Verwachte plek ${track.expectedRank.toFixed(1)} · 90%-interval ${track.rankLow}–${track.rankHigh} · ${stability}">
+        <span class="rank-number">${String(track.rank).padStart(2, "0")}</span>
+        <img src="${escapeHtml(track.cover)}" alt="" width="64" height="64" />
+        <span class="rank-track">
+          <span class="rank-track-main"><strong>${escapeHtml(track.title)}</strong><span>${escapeHtml(track.artist)}</span></span>
+          <small class="rank-uncertainty">Verwacht ${expectedRank} · 90%: plek ${track.rankLow}–${track.rankHigh}</small>
+        </span>
+        <span class="rank-owner"><i class="member-dot" style="--member-color:${member.color}"></i>${member.name}</span>
+        <strong class="rank-score">${Math.round(track.top50Probability * 100)}%</strong>
+      </li>
+      ${track.rank === 50 ? '<li class="cutoff-marker"><span>De streep</span><small>Deze 50 gaan mee.</small></li>' : ""}`;
+  }
+
+  function render(payload: RankingPayload) {
+    count.textContent = String(payload.status.completedVoterCount);
+    for (const status of payload.status.members) {
+      document.querySelector<HTMLElement>(`[data-status-member="${CSS.escape(status.memberId)}"]`)?.classList.toggle("complete", status.votingDone);
+    }
+    if (!payload.status.votingComplete || !payload.ranking) {
+      content.hidden = true;
+      gate.hidden = false;
+      copy.textContent = payload.status.finalizedCount < 5
+        ? "Eerst levert iedereen twintig nummers met audio in."
+        : "De uitslag blijft verborgen totdat iedereen zijn 120 keuzes heeft gemaakt.";
+      gate.innerHTML = `
+        <p class="eyebrow">Nog even geduld</p>
+        <h2>${payload.status.completedVoterCount} van 5 deelnemers zijn klaar.</h2>
+        <p>Iedereen kan zelfstandig verdergaan. De definitieve top 50 verschijnt automatisch na de laatste keuze.</p>`;
+      return;
+    }
+    gate.hidden = true;
+    content.hidden = false;
+    copy.textContent = "Berekend uit alle 600 keuzes; de kans houdt ook rekening met onzekerheid rond de grens.";
+    list.innerHTML = payload.ranking.map(rowMarkup).join("");
+  }
+
+  fetch("/api/ranking", { headers: { Accept: "application/json" } })
+    .then(async (response) => {
+      const payload = await response.json() as RankingPayload & { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Ranglijst laden mislukt.");
+      render(payload);
+    })
+    .catch((error) => {
+      gate.innerHTML = `<p class="eyebrow">Niet beschikbaar</p><h2>De ranglijst kan niet worden geladen.</h2><p>${escapeHtml(error instanceof Error ? error.message : "Probeer het later opnieuw.")}</p>`;
+    });
+</script>

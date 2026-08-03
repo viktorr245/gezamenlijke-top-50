@@ -1,0 +1,906 @@
+---
+import AppShell from "../components/AppShell.astro";
+import ProgressMarks from "../components/ProgressMarks.astro";
+---
+
+<AppShell active="mijn-20" title="Mijn 20">
+  <section class="submission-page" aria-labelledby="submission-title">
+    <div class="submission-heading">
+      <div>
+        <p class="eyebrow">Jouw inzending</p>
+        <h1 id="submission-title">Twintig nummers<br />die je wilt delen.</h1>
+      </div>
+
+      <div class="submission-progress" aria-label="Aantal toegevoegde nummers">
+        <p><strong id="submission-count">0</strong><span>van 20</span></p>
+        <ProgressMarks total={20} current={0} id="submission-progress-marks" />
+        <small id="submission-audio-progress">0 van 20 met audio</small>
+      </div>
+    </div>
+
+    <form class="add-track-form" id="add-track-form">
+      <label for="track-search">Nummer toevoegen</label>
+      <div class="track-search-anchor">
+        <div class="track-search-controls">
+          <input
+            id="track-search"
+            name="track"
+            type="search"
+            autocomplete="off"
+            placeholder="Zoek op titel, artiest of album"
+            aria-controls="track-search-results"
+            aria-expanded="false"
+            disabled
+            required
+          />
+          <button class="outlined-action search-submit" type="submit" disabled>
+            <i class="ph ph-magnifying-glass" aria-hidden="true"></i>
+            <span>Zoeken</span>
+          </button>
+        </div>
+
+        <section class="track-search-results" id="track-search-results" aria-label="Zoekresultaten" hidden>
+          <header>
+            <h2>Zoekresultaten</h2>
+            <button class="search-close" type="button" data-close-search aria-label="Sluit zoekresultaten">
+              <i class="ph ph-x" aria-hidden="true"></i>
+            </button>
+          </header>
+          <div class="track-search-content" id="track-search-content" aria-live="polite"></div>
+          <footer>
+            <span>Resultaten uit de Nederlandse iTunes Store.</span>
+            <span>Previews met dank aan iTunes.</span>
+          </footer>
+        </section>
+      </div>
+      <p class="form-message" id="submission-message" role="status" aria-live="polite"></p>
+    </form>
+
+    <ol class="submission-list" id="submission-list"></ol>
+
+    <div class="submission-footer">
+      <button class="outlined-action save-submission" type="button" id="save-submission" disabled>Inzending definitief maken</button>
+      <p id="spots-left">Inzending controleren…</p>
+    </div>
+  </section>
+</AppShell>
+
+<script>
+  import { formatDuration, type Track } from "../data/tracks";
+  import { getActiveMember } from "../scripts/member-session";
+
+  type AudioRecord = {
+    trackId: string;
+    title: string;
+    artist: string;
+    originalName: string;
+    mimeType: string;
+    size: number;
+    uploadedAt: string;
+    url: string;
+  };
+
+  type FinalSubmission = {
+    memberId: string;
+    tracks: Track[];
+    updatedAt: string;
+    finalizedAt: string | null;
+  };
+
+  const memberId = getActiveMember();
+  const state: { submissionIds: string[]; customTracks: Record<string, Track> } = { submissionIds: [], customTracks: {} };
+  const list = document.querySelector<HTMLOListElement>("#submission-list")!;
+  const form = document.querySelector<HTMLFormElement>("#add-track-form")!;
+  const input = document.querySelector<HTMLInputElement>("#track-search")!;
+  const searchAnchor = document.querySelector<HTMLElement>(".track-search-anchor")!;
+  const searchPanel = document.querySelector<HTMLElement>("#track-search-results")!;
+  const searchContent = document.querySelector<HTMLElement>("#track-search-content")!;
+  const searchSubmit = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  const count = document.querySelector<HTMLElement>("#submission-count")!;
+  const audioProgress = document.querySelector<HTMLElement>("#submission-audio-progress")!;
+  const marks = Array.from(document.querySelectorAll<HTMLElement>("#submission-progress-marks .progress-mark"));
+  const message = document.querySelector<HTMLElement>("#submission-message")!;
+  const spotsLeft = document.querySelector<HTMLElement>("#spots-left")!;
+  const saveButton = document.querySelector<HTMLButtonElement>("#save-submission")!;
+  const searchCache = new Map<string, Track[]>();
+  const currentSearchTracks = new Map<string, Track>();
+  const audioRecords = new Map<string, AudioRecord>();
+  const uploadingTracks = new Set<string>();
+  const removingTracks = new Set<string>();
+  const playbackPositions = new Map<string, number>();
+  const previewAudio = new Audio();
+  const submissionAudio = new Audio();
+  let searchTimer: number | undefined;
+  let searchVersion = 0;
+  let activePreviewId: string | undefined;
+  let activeSubmissionId: string | undefined;
+  let audioIndexLoaded = false;
+  let audioIndexFailed = false;
+  let submissionStatusLoaded = false;
+  let finalSubmission: FinalSubmission | undefined;
+
+  function escapeHtml(value: unknown): string {
+    return String(value).replace(/[&<>"']/g, (character) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#039;",
+    })[character]!);
+  }
+
+  function getTrack(id: string): Track | undefined {
+    return state.customTracks[id];
+  }
+
+  function isSubmissionLocked(): boolean {
+    return !submissionStatusLoaded || Boolean(finalSubmission);
+  }
+
+  function isFinalSubmission(value: unknown): value is FinalSubmission {
+    if (!value || typeof value !== "object") return false;
+    const submission = value as Partial<FinalSubmission>;
+    return Boolean(
+      submission.memberId === memberId
+      && (submission.finalizedAt === null || (typeof submission.finalizedAt === "string" && Number.isFinite(Date.parse(submission.finalizedAt))))
+      && typeof submission.updatedAt === "string"
+      && Array.isArray(submission.tracks)
+      && submission.tracks.length <= 20
+      && submission.tracks.every((track) => (
+        track
+        && typeof track.id === "string"
+        && typeof track.title === "string"
+        && typeof track.artist === "string"
+        && typeof track.cover === "string"
+        && typeof track.duration === "number"
+      )),
+    );
+  }
+
+  let draftSaveQueue = Promise.resolve();
+  function saveState() {
+    if (!submissionStatusLoaded || finalSubmission) return;
+    const tracks = state.submissionIds.map(getTrack).filter((track): track is Track => Boolean(track));
+    draftSaveQueue = draftSaveQueue.then(async () => {
+      const response = await fetch(`/api/submissions/${memberId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ tracks }),
+      });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "De lijst kon niet worden opgeslagen.");
+    }).catch((error) => {
+      setMessage(error instanceof Error ? error.message : "De lijst kon niet worden opgeslagen.", true);
+      loadFinalSubmission();
+    });
+  }
+
+  function formattedFinalizedAt(value: string): string {
+    return new Intl.DateTimeFormat("nl-NL", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+  }
+
+  function isTrackSelected(candidate: Track): boolean {
+    const title = candidate.title.trim().toLocaleLowerCase("nl-NL");
+    const artist = candidate.artist.trim().toLocaleLowerCase("nl-NL");
+    return state.submissionIds.some((id) => {
+      const selected = getTrack(id);
+      return selected?.title.trim().toLocaleLowerCase("nl-NL") === title
+        && selected.artist.trim().toLocaleLowerCase("nl-NL") === artist;
+    });
+  }
+
+  function isAudioRecord(value: unknown): value is AudioRecord {
+    if (!value || typeof value !== "object") return false;
+    const record = value as Partial<AudioRecord>;
+    return Boolean(
+      typeof record.trackId === "string"
+      && typeof record.title === "string"
+      && typeof record.artist === "string"
+      && typeof record.originalName === "string"
+      && typeof record.mimeType === "string"
+      && typeof record.size === "number"
+      && typeof record.uploadedAt === "string"
+      && typeof record.url === "string"
+      && record.url.startsWith("/api/audio/"),
+    );
+  }
+
+  function isITunesTrack(value: unknown): value is Track {
+    if (!value || typeof value !== "object") return false;
+    const track = value as Partial<Track>;
+    return Boolean(
+      typeof track.id === "string"
+      && track.id.startsWith("itunes-")
+      && typeof track.title === "string"
+      && typeof track.artist === "string"
+      && typeof track.duration === "number"
+      && Number.isFinite(track.duration)
+      && typeof track.cover === "string"
+      && track.source === "itunes"
+      && typeof track.sourceId === "string",
+    );
+  }
+
+  function audioControls(track: Track): string {
+    const record = audioRecords.get(track.id);
+    const input = `
+      <input
+        class="audio-file-input"
+        type="file"
+        data-audio-file
+        accept="audio/*,.m4a,.flac"
+        aria-label="Kies een audiobestand voor ${escapeHtml(track.title)}"
+      />`;
+
+    if (!audioIndexLoaded) {
+      return `
+        <div class="submission-audio submission-audio--checking">
+          <span class="audio-inline-status"><span class="search-loader" aria-hidden="true"></span> Audio controleren…</span>
+        </div>`;
+    }
+
+    if (audioIndexFailed) {
+      return `
+        <div class="submission-audio submission-audio--error">
+          <span class="audio-inline-status"><i class="ph ph-warning-circle" aria-hidden="true"></i> Audiostatus niet beschikbaar</span>
+          <button class="text-action audio-retry" type="button" data-retry-audio>Probeer opnieuw</button>
+        </div>`;
+    }
+
+    if (uploadingTracks.has(track.id)) {
+      return `
+        <div class="submission-audio submission-audio--uploading">
+          <span class="audio-inline-status"><span class="search-loader" aria-hidden="true"></span> ${record ? "Nieuw bestand uploaden…" : "Audio uploaden…"}</span>
+        </div>`;
+    }
+
+    if (!record) {
+      return `
+        <div class="submission-audio submission-audio--missing" data-audio-drop>
+          <span class="audio-required">
+            <i class="ph ph-warning-circle" aria-hidden="true"></i>
+            <span><strong>Audio ontbreekt</strong><small>Sleep audio hierheen of kies een bestand.</small></span>
+          </span>
+          <button class="outlined-action audio-upload-action" type="button" data-upload-audio>
+            <i class="ph ph-upload-simple" aria-hidden="true"></i><span>Audio toevoegen</span>
+          </button>
+          ${input}
+        </div>`;
+    }
+
+    const position = playbackPositions.get(track.id) ?? 0;
+    const duration = track.duration;
+    return `
+      <div class="submission-audio submission-audio--ready" data-row-player data-audio-drop>
+        <span class="audio-ready-label" title="${escapeHtml(record.originalName)}">
+          <i class="ph ph-check-circle" aria-hidden="true"></i>
+          <span><strong>Audio toegevoegd</strong><small>${escapeHtml(record.originalName)} · sleep om te vervangen</small></span>
+        </span>
+        <div class="row-audio-player">
+          <button class="row-audio-toggle" type="button" data-row-play aria-label="Speel ${escapeHtml(track.title)} af" aria-pressed="false">
+            <i class="ph ph-play" aria-hidden="true"></i>
+          </button>
+          <label class="sr-only" for="audio-seek-${escapeHtml(track.id)}">Positie in ${escapeHtml(track.title)}</label>
+          <input
+            class="row-audio-seek"
+            id="audio-seek-${escapeHtml(track.id)}"
+            data-row-seek
+            type="range"
+            min="0"
+            max="${duration}"
+            step="0.1"
+            value="${position}"
+            aria-valuetext="${formatDuration(Math.floor(position))} van ${formatDuration(duration)}"
+          />
+          <output class="row-audio-time" for="audio-seek-${escapeHtml(track.id)}" data-row-time>${formatDuration(Math.floor(position))} / ${formatDuration(duration)}</output>
+        </div>
+        <button class="text-action audio-replace-action" type="button" data-upload-audio>Vervang</button>
+        ${input}
+      </div>`;
+  }
+
+  function setMessage(text: string, error = false) {
+    message.textContent = text;
+    message.classList.toggle("error", error);
+  }
+
+  function sizeSearchPanel() {
+    if (searchPanel.hidden) return;
+    const bottomSpace = window.matchMedia("(max-width: 767px)").matches ? 74 : 16;
+    const available = window.innerHeight - searchPanel.getBoundingClientRect().top - bottomSpace;
+    searchPanel.style.maxHeight = `${Math.max(120, Math.min(454, available))}px`;
+  }
+
+  function setSearchOpen(open: boolean) {
+    searchPanel.hidden = !open;
+    input.setAttribute("aria-expanded", String(open));
+    if (open) sizeSearchPanel();
+    else stopPreview();
+  }
+
+  function renderSearchStatus(kind: "loading" | "empty" | "error" | "hint", text: string) {
+    currentSearchTracks.clear();
+    searchContent.innerHTML = `
+      <div class="search-status search-status--${kind}" role="${kind === "error" ? "alert" : "status"}">
+        ${kind === "loading" ? '<span class="search-loader" aria-hidden="true"></span>' : ""}
+        <p>${escapeHtml(text)}</p>
+      </div>`;
+    setSearchOpen(true);
+  }
+
+  async function requestITunes(query: string): Promise<Track[]> {
+    const key = query.toLocaleLowerCase("nl-NL");
+    const cached = searchCache.get(key);
+    if (cached) return cached;
+
+    const params = new URLSearchParams({ q: query });
+    const response = await fetch(`/api/itunes/search?${params.toString()}`, { headers: { Accept: "application/json" } });
+    const payload = await response.json() as { tracks?: unknown; error?: string };
+    if (!response.ok) throw new Error(payload.error ?? "iTunes zoeken mislukt.");
+    const results = Array.isArray(payload.tracks) ? payload.tracks.filter(isITunesTrack) : [];
+    searchCache.set(key, results);
+    return results;
+  }
+
+  async function pinITunesTrack(track: Track): Promise<Track> {
+    if (!track.sourceId) throw new Error("De iTunes-verwijzing van dit nummer ontbreekt.");
+    const response = await fetch("/api/itunes/catalog", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ sourceId: track.sourceId }),
+    });
+    const payload = await response.json() as { track?: unknown; error?: string };
+    if (!response.ok || !isITunesTrack(payload.track)) throw new Error(payload.error ?? "Het nummer kon niet worden opgeslagen.");
+    return payload.track;
+  }
+
+  function renderSearchResults(results: Track[]) {
+    currentSearchTracks.clear();
+    results.forEach((track) => currentSearchTracks.set(track.id, track));
+
+    searchContent.innerHTML = results
+      .map((track) => {
+        const selected = isTrackSelected(track);
+        const sourceLink = track.sourceUrl
+          ? `<a class="search-source-link" href="${escapeHtml(track.sourceUrl)}" target="_blank" rel="noreferrer">iTunes <i class="ph ph-arrow-square-out" aria-hidden="true"></i></a>`
+          : "";
+        return `
+          <article class="search-result" data-search-track="${escapeHtml(track.id)}">
+            <img src="${escapeHtml(track.cover)}" alt="" width="56" height="56" loading="lazy" />
+            <div class="search-result-copy">
+              <strong>${escapeHtml(track.title)}</strong>
+              <span>${escapeHtml(track.artist)}</span>
+              <small>${escapeHtml(track.album ?? "Single")} · ${escapeHtml(formatDuration(track.duration))} ${sourceLink}</small>
+            </div>
+            ${track.previewUrl ? `
+              <button class="search-preview" type="button" data-preview-track="${escapeHtml(track.id)}" aria-label="Beluister voorproefje van ${escapeHtml(track.title)}" aria-pressed="false">
+                <i class="ph ph-play" aria-hidden="true"></i>
+              </button>` : '<span class="search-preview-placeholder" aria-hidden="true"></span>'}
+            <button class="outlined-action search-add" type="button" data-add-track="${escapeHtml(track.id)}" ${selected || state.submissionIds.length >= 20 ? "disabled" : ""}>
+              ${selected ? "Al gekozen" : state.submissionIds.length >= 20 ? "Lijst vol" : "Voeg toe"}
+            </button>
+          </article>`;
+      })
+      .join("");
+    setSearchOpen(true);
+  }
+
+  async function search(query: string) {
+    const normalized = query.trim();
+    if (normalized.length < 2) {
+      renderSearchStatus("hint", "Typ minstens twee tekens om te zoeken.");
+      return;
+    }
+
+    const version = ++searchVersion;
+    renderSearchStatus("loading", `Zoeken naar “${normalized}”…`);
+    try {
+      const results = await requestITunes(normalized);
+      if (version !== searchVersion || input.value.trim() !== normalized) return;
+      if (results.length === 0) {
+        renderSearchStatus("empty", `Geen nummers gevonden voor “${normalized}”. Probeer een artiest of een kortere titel.`);
+        return;
+      }
+      renderSearchResults(results);
+    } catch {
+      if (version !== searchVersion) return;
+      renderSearchStatus("error", "Zoeken lukt nu niet. Controleer je internetverbinding en probeer het opnieuw.");
+    }
+  }
+
+  function scheduleSearch() {
+    window.clearTimeout(searchTimer);
+    const query = input.value.trim();
+    if (query.length < 2) {
+      searchVersion += 1;
+      if (query.length === 0) setSearchOpen(false);
+      else renderSearchStatus("hint", "Typ nog één teken om te zoeken.");
+      return;
+    }
+    searchTimer = window.setTimeout(() => search(query), 450);
+  }
+
+  function setPreviewButton(trackId: string, playing: boolean) {
+    const button = searchContent.querySelector<HTMLButtonElement>(`[data-preview-track="${CSS.escape(trackId)}"]`);
+    if (!button) return;
+    const track = currentSearchTracks.get(trackId);
+    button.classList.toggle("is-playing", playing);
+    button.setAttribute("aria-pressed", String(playing));
+    button.setAttribute("aria-label", `${playing ? "Pauzeer" : "Beluister"} voorproefje van ${track?.title ?? "dit nummer"}`);
+    button.innerHTML = `<i class="ph ph-${playing ? "pause" : "play"}" aria-hidden="true"></i>`;
+  }
+
+  function stopPreview(reset = true) {
+    if (activePreviewId) setPreviewButton(activePreviewId, false);
+    previewAudio.pause();
+    if (reset) previewAudio.removeAttribute("src");
+    activePreviewId = undefined;
+  }
+
+  async function togglePreview(track: Track) {
+    if (!track.previewUrl) return;
+    if (activePreviewId === track.id && !previewAudio.paused) {
+      stopPreview(false);
+      return;
+    }
+
+    stopPreview();
+    stopSubmissionPlayback();
+    activePreviewId = track.id;
+    previewAudio.src = track.previewUrl;
+    previewAudio.volume = 0.85;
+    try {
+      await previewAudio.play();
+      setPreviewButton(track.id, true);
+    } catch {
+      activePreviewId = undefined;
+      setMessage("De preview van dit nummer kan niet worden afgespeeld.", true);
+    }
+  }
+
+  function rowFor(trackId: string): HTMLElement | null {
+    return list.querySelector<HTMLElement>(`[data-track-id="${CSS.escape(trackId)}"]`);
+  }
+
+  function setSubmissionPlaying(trackId: string, playing: boolean) {
+    const row = rowFor(trackId);
+    if (!row) return;
+    row.classList.toggle("is-audio-playing", playing);
+    for (const button of row.querySelectorAll<HTMLButtonElement>("[data-cover-play], [data-row-play]")) {
+      const track = getTrack(trackId);
+      button.setAttribute("aria-pressed", String(playing));
+      button.setAttribute("aria-label", `${playing ? "Pauzeer" : "Speel"} ${track?.title ?? "dit nummer"}`);
+      const icon = button.querySelector("i");
+      icon?.classList.toggle("ph-play", !playing);
+      icon?.classList.toggle("ph-pause", playing);
+    }
+  }
+
+  function updateSubmissionTimeline(trackId: string, position: number, duration?: number) {
+    const row = rowFor(trackId);
+    const track = getTrack(trackId);
+    if (!row || !track) return;
+    const total = Number.isFinite(duration) && (duration ?? 0) > 0 ? duration! : track.duration;
+    const safePosition = Math.max(0, Math.min(position, total));
+    playbackPositions.set(trackId, safePosition);
+    const seek = row.querySelector<HTMLInputElement>("[data-row-seek]");
+    const output = row.querySelector<HTMLOutputElement>("[data-row-time]");
+    if (seek) {
+      seek.max = String(total);
+      seek.value = String(safePosition);
+      seek.style.setProperty("--seek-progress", `${total > 0 ? (safePosition / total) * 100 : 0}%`);
+      seek.setAttribute("aria-valuetext", `${formatDuration(Math.floor(safePosition))} van ${formatDuration(Math.floor(total))}`);
+    }
+    if (output) output.textContent = `${formatDuration(Math.floor(safePosition))} / ${formatDuration(Math.floor(total))}`;
+  }
+
+  function stopSubmissionPlayback(reset = false) {
+    const trackId = activeSubmissionId;
+    if (trackId && !submissionAudio.paused) playbackPositions.set(trackId, submissionAudio.currentTime);
+    submissionAudio.pause();
+    if (reset) {
+      submissionAudio.removeAttribute("src");
+      if (trackId) playbackPositions.set(trackId, 0);
+    }
+    if (trackId) setSubmissionPlaying(trackId, false);
+    activeSubmissionId = undefined;
+  }
+
+  async function toggleSubmissionPlayback(trackId: string) {
+    const track = getTrack(trackId);
+    if (!track) return;
+    if (activeSubmissionId === trackId) {
+      stopSubmissionPlayback();
+      return;
+    }
+
+    stopPreview();
+    stopSubmissionPlayback();
+    activeSubmissionId = trackId;
+    const record = audioRecords.get(trackId);
+      const source = record?.url ?? track.previewUrl;
+      try {
+      if (!source) throw new Error("Voeg eerst het audiobestand toe.");
+
+      const position = record ? playbackPositions.get(trackId) ?? 0 : 0;
+      submissionAudio.src = source;
+      submissionAudio.load();
+      submissionAudio.addEventListener("loadedmetadata", () => {
+        const duration = Number.isFinite(submissionAudio.duration) ? submissionAudio.duration : track.duration;
+        if (position > 0 && position < duration) submissionAudio.currentTime = position;
+        updateSubmissionTimeline(trackId, submissionAudio.currentTime, duration);
+      }, { once: true });
+      await submissionAudio.play();
+      setSubmissionPlaying(trackId, true);
+    } catch {
+      activeSubmissionId = undefined;
+      setSubmissionPlaying(trackId, false);
+      setMessage("Dit audiobestand kan niet worden afgespeeld.", true);
+    }
+  }
+
+  async function loadAudioIndex() {
+    audioIndexLoaded = false;
+    audioIndexFailed = false;
+    render();
+    try {
+      const response = await fetch("/api/audio", { headers: { Accept: "application/json" } });
+      if (!response.ok) throw new Error("Audiostatus laden mislukt");
+      const payload = await response.json() as { audio?: Record<string, unknown> };
+      audioRecords.clear();
+      for (const [trackId, record] of Object.entries(payload.audio ?? {})) {
+        if (isAudioRecord(record) && record.trackId === trackId) audioRecords.set(trackId, record);
+      }
+      audioIndexLoaded = true;
+      render();
+    } catch {
+      audioIndexLoaded = true;
+      audioIndexFailed = true;
+      render();
+    }
+  }
+
+  async function loadFinalSubmission() {
+    try {
+      const response = await fetch(`/api/submissions/${memberId}`, { headers: { Accept: "application/json" } });
+      const payload = await response.json() as { submission?: unknown; error?: string };
+      if (response.ok && payload.submission == null) {
+        submissionStatusLoaded = true;
+        render();
+        return;
+      }
+      if (!response.ok || !isFinalSubmission(payload.submission)) throw new Error(payload.error ?? "De inzending kon niet worden geladen.");
+      const submission = payload.submission;
+      finalSubmission = submission.finalizedAt ? submission : undefined;
+      state.submissionIds = submission.tracks.map((track) => track.id);
+      for (const track of submission.tracks) {
+        state.customTracks[track.id] = track;
+      }
+      submissionStatusLoaded = true;
+      render();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "De definitieve status kon niet worden geladen.", true);
+    }
+  }
+
+  async function finalizeCurrentSubmission() {
+    if (isSubmissionLocked() || state.submissionIds.length !== 20) return;
+    const tracks = state.submissionIds.map(getTrack).filter((track): track is Track => Boolean(track));
+    if (tracks.length !== 20) {
+      setMessage("Een of meer nummers konden niet worden geladen.", true);
+      return;
+    }
+    const missingAudio = tracks.filter((track) => !audioRecords.has(track.id));
+    if (missingAudio.length > 0) {
+      setMessage(`Voeg eerst audio toe aan alle nummers. Er ontbreken er nog ${missingAudio.length}.`, true);
+      return;
+    }
+    if (!window.confirm("Hierna staan deze twintig nummers definitief vast. Doorgaan?")) return;
+
+    saveButton.disabled = true;
+    saveButton.textContent = "Definitief maken…";
+    try {
+      await draftSaveQueue;
+      const response = await fetch(`/api/submissions/${memberId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ tracks }),
+      });
+      const payload = await response.json() as { submission?: unknown; error?: string };
+      if (!response.ok || !isFinalSubmission(payload.submission)) throw new Error(payload.error ?? "De inzending kon niet definitief worden gemaakt.");
+      finalSubmission = payload.submission;
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "De inzending kon niet definitief worden gemaakt.", true);
+    } finally {
+      render();
+    }
+  }
+
+  async function uploadAudio(track: Track, file: File) {
+    if (!file.type.startsWith("audio/")) {
+      setMessage("Kies een geldig audiobestand.", true);
+      return;
+    }
+    if (file.size > 100 * 1024 * 1024) {
+      setMessage("Het audiobestand mag maximaal 100 MB zijn.", true);
+      return;
+    }
+
+    stopSubmissionPlayback();
+    uploadingTracks.add(track.id);
+    setMessage("");
+    render();
+    try {
+      await draftSaveQueue;
+      const form = new FormData();
+      form.append("audio", file);
+      form.append("title", track.title);
+      form.append("artist", track.artist);
+      form.append("memberId", memberId);
+      const response = await fetch(`/api/audio/${encodeURIComponent(track.id)}`, { method: "POST", body: form });
+      const payload = await response.json() as { audio?: unknown; error?: string };
+      if (!response.ok || !isAudioRecord(payload.audio)) throw new Error(payload.error ?? "Uploaden is mislukt.");
+      audioRecords.set(track.id, payload.audio);
+      playbackPositions.set(track.id, 0);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Uploaden is mislukt.", true);
+    } finally {
+      uploadingTracks.delete(track.id);
+      render();
+    }
+  }
+
+  async function removeTrack(trackId: string) {
+    if (isSubmissionLocked() || removingTracks.has(trackId)) return;
+    removingTracks.add(trackId);
+    if (activeSubmissionId === trackId) stopSubmissionPlayback();
+    render();
+    try {
+      // Een zojuist toegevoegd nummer moet eerst in het centrale concept staan;
+      // de server verwijdert alleen audio uit het concept van de eigenaar.
+      await draftSaveQueue;
+      const response = await fetch(`/api/audio/${encodeURIComponent(trackId)}?memberId=${encodeURIComponent(memberId)}`, { method: "DELETE" });
+      if (!response.ok && response.status !== 404) {
+        const payload = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(payload.error ?? "Het audiobestand kon niet worden verwijderd.");
+      }
+      audioRecords.delete(trackId);
+      playbackPositions.delete(trackId);
+      state.submissionIds = state.submissionIds.filter((id) => id !== trackId);
+      delete state.customTracks[trackId];
+      removingTracks.delete(trackId);
+      saveState();
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Het nummer kon niet worden verwijderd.", true);
+    } finally {
+      removingTracks.delete(trackId);
+      render();
+    }
+  }
+
+  function render() {
+    const submissionTracks = state.submissionIds.map(getTrack).filter((track): track is Track => Boolean(track));
+    const selectionLocked = isSubmissionLocked();
+    list.innerHTML = submissionTracks
+      .map((track, index) => {
+        const removing = removingTracks.has(track.id);
+        return `
+          <li class="submission-row${finalSubmission ? " is-final" : ""}" data-track-id="${escapeHtml(track.id)}">
+            <span class="row-index">${index + 1}</span>
+            <button class="row-cover-button" type="button" data-cover-play aria-label="Speel ${escapeHtml(track.title)}" aria-pressed="false">
+              <img src="${escapeHtml(track.cover)}" alt="" width="72" height="72" draggable="false" />
+              <span class="row-cover-icon" aria-hidden="true"><i class="ph ph-play"></i></span>
+            </button>
+            <span class="row-track"><strong>${escapeHtml(track.title)}</strong><span>${escapeHtml(track.artist)}</span></span>
+            <span class="row-duration">${formatDuration(track.duration)}</span>
+            <button class="text-action remove-track" type="button" data-remove ${selectionLocked || removing ? "disabled" : ""}>${removing ? "Verwijderen…" : "Verwijder"}</button>
+            ${audioControls(track)}
+          </li>`;
+      })
+      .join("");
+
+    count.textContent = String(state.submissionIds.length);
+    marks.forEach((mark, index) => mark.classList.toggle("complete", index < state.submissionIds.length));
+    const remaining = 20 - state.submissionIds.length;
+    const audioCount = submissionTracks.filter((track) => audioRecords.has(track.id)).length;
+    const missingAudio = submissionTracks.length - audioCount;
+    audioProgress.textContent = `${audioCount} van 20 met audio`;
+    spotsLeft.textContent = !submissionStatusLoaded
+      ? "Inzending controleren…"
+      : finalSubmission
+        ? `Definitief sinds ${formattedFinalizedAt(finalSubmission.finalizedAt!)}.`
+        : remaining === 0
+          ? missingAudio > 0
+            ? `Nog ${missingAudio} ${missingAudio === 1 ? "audiobestand" : "audiobestanden"} toevoegen.`
+            : "Alles compleet. Controleer je lijst en maak hem definitief."
+          : `Nog ${remaining} ${remaining === 1 ? "plek" : "plekken"} vrij.`;
+    input.disabled = selectionLocked || remaining === 0;
+    searchSubmit.disabled = selectionLocked || remaining === 0;
+    saveButton.disabled = selectionLocked || remaining !== 0 || missingAudio !== 0 || !audioIndexLoaded || audioIndexFailed;
+    saveButton.textContent = finalSubmission ? "Inzending is definitief" : "Inzending definitief maken";
+    if (selectionLocked || remaining === 0) setSearchOpen(false);
+  }
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (isSubmissionLocked() || state.submissionIds.length >= 20) return;
+    window.clearTimeout(searchTimer);
+    search(input.value);
+  });
+
+  input.addEventListener("input", () => {
+    setMessage("");
+    scheduleSearch();
+  });
+
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowDown" || searchPanel.hidden) return;
+    const firstControl = searchContent.querySelector<HTMLElement>("button:not(:disabled), a[href]");
+    if (!firstControl) return;
+    event.preventDefault();
+    firstControl.focus();
+  });
+
+  searchPanel.addEventListener("click", async (event) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("[data-close-search]")) {
+      setSearchOpen(false);
+      input.focus();
+      return;
+    }
+
+    const previewButton = target.closest<HTMLButtonElement>("[data-preview-track]");
+    if (previewButton) {
+      const track = currentSearchTracks.get(previewButton.dataset.previewTrack!);
+      if (track) togglePreview(track);
+      return;
+    }
+
+    const addButton = target.closest<HTMLButtonElement>("[data-add-track]");
+    if (!addButton || addButton.disabled || isSubmissionLocked() || state.submissionIds.length >= 20) return;
+    const track = currentSearchTracks.get(addButton.dataset.addTrack!);
+    if (!track || isTrackSelected(track)) return;
+    addButton.disabled = true;
+    addButton.textContent = "Opslaan…";
+    try {
+      const storedTrack = await pinITunesTrack(track);
+      if (state.submissionIds.length >= 20 || isTrackSelected(storedTrack)) return;
+      state.customTracks[storedTrack.id] = { ...storedTrack, owner: memberId };
+      state.submissionIds.push(storedTrack.id);
+      saveState();
+      input.value = "";
+      setSearchOpen(false);
+      setMessage("");
+      render();
+    } catch (error) {
+      addButton.disabled = false;
+      addButton.textContent = "Voeg toe";
+      setMessage(error instanceof Error ? error.message : "Het nummer kon niet worden opgeslagen.", true);
+    }
+  });
+
+  document.addEventListener("click", (event) => {
+    if (searchPanel.hidden || searchAnchor.contains(event.target as Node)) return;
+    setSearchOpen(false);
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || searchPanel.hidden) return;
+    setSearchOpen(false);
+    input.focus();
+  });
+
+  window.addEventListener("resize", sizeSearchPanel);
+
+  previewAudio.addEventListener("ended", () => stopPreview());
+  previewAudio.addEventListener("error", () => {
+    if (!activePreviewId) return;
+    stopPreview();
+    setMessage("De preview van dit nummer kan niet worden afgespeeld.", true);
+  });
+
+  submissionAudio.addEventListener("timeupdate", () => {
+    if (!activeSubmissionId || !audioRecords.has(activeSubmissionId)) return;
+    updateSubmissionTimeline(activeSubmissionId, submissionAudio.currentTime, submissionAudio.duration);
+  });
+
+  submissionAudio.addEventListener("ended", () => {
+    const trackId = activeSubmissionId;
+    if (!trackId) return;
+    playbackPositions.set(trackId, 0);
+    updateSubmissionTimeline(trackId, 0, submissionAudio.duration);
+    setSubmissionPlaying(trackId, false);
+    activeSubmissionId = undefined;
+  });
+
+  submissionAudio.addEventListener("error", () => {
+    const trackId = activeSubmissionId;
+    if (!trackId) return;
+    activeSubmissionId = undefined;
+    setSubmissionPlaying(trackId, false);
+    setMessage("Dit audiobestand kan niet worden afgespeeld.", true);
+  });
+
+  list.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    const row = target.closest<HTMLElement>("[data-track-id]");
+    if (!row) return;
+    const id = row.dataset.trackId!;
+
+    if (target.closest("[data-retry-audio]")) {
+      loadAudioIndex();
+      return;
+    }
+
+    if (target.closest("[data-upload-audio]")) {
+      row.querySelector<HTMLInputElement>("[data-audio-file]")?.click();
+      return;
+    }
+
+    if (target.closest("[data-cover-play], [data-row-play]")) {
+      toggleSubmissionPlayback(id);
+      return;
+    }
+
+    if (target.closest("[data-remove]")) {
+      removeTrack(id);
+      return;
+    }
+  });
+
+  list.addEventListener("change", (event) => {
+    const inputTarget = (event.target as HTMLElement).closest<HTMLInputElement>("[data-audio-file]");
+    const trackId = inputTarget?.closest<HTMLElement>("[data-track-id]")?.dataset.trackId;
+    const track = trackId ? getTrack(trackId) : undefined;
+    const file = inputTarget?.files?.[0];
+    if (track && file) uploadAudio(track, file);
+  });
+
+  list.addEventListener("input", (event) => {
+    const seek = (event.target as HTMLElement).closest<HTMLInputElement>("[data-row-seek]");
+    const trackId = seek?.closest<HTMLElement>("[data-track-id]")?.dataset.trackId;
+    if (!seek || !trackId) return;
+    const position = Number(seek.value);
+    playbackPositions.set(trackId, position);
+    if (activeSubmissionId === trackId && Number.isFinite(position)) submissionAudio.currentTime = position;
+    const duration = Number(seek.max);
+    updateSubmissionTimeline(trackId, position, duration);
+  });
+
+  list.addEventListener("dragenter", (event) => {
+    const dropzone = (event.target as HTMLElement).closest<HTMLElement>("[data-audio-drop]");
+    if (!dropzone || !(event as DragEvent).dataTransfer?.types.includes("Files")) return;
+    event.preventDefault();
+    dropzone.classList.add("is-drag-over");
+  });
+
+  list.addEventListener("dragleave", (event) => {
+    const dropzone = (event.target as HTMLElement).closest<HTMLElement>("[data-audio-drop]");
+    if (!dropzone || dropzone.contains((event as DragEvent).relatedTarget as Node | null)) return;
+    dropzone.classList.remove("is-drag-over");
+  });
+
+  list.addEventListener("drop", (event) => {
+    const dragEvent = event as DragEvent;
+    const dropzone = (event.target as HTMLElement).closest<HTMLElement>("[data-audio-drop]");
+    if (!dropzone || !dragEvent.dataTransfer?.files.length) return;
+    event.preventDefault();
+    dropzone.classList.remove("is-drag-over");
+    const trackId = dropzone.closest<HTMLElement>("[data-track-id]")?.dataset.trackId;
+    const track = trackId ? getTrack(trackId) : undefined;
+    if (!track) return;
+    if (dragEvent.dataTransfer.files.length > 1) {
+      setMessage("Sleep één audiobestand tegelijk naar een nummer.", true);
+      return;
+    }
+    uploadAudio(track, dragEvent.dataTransfer.files[0]);
+  });
+
+  saveButton.addEventListener("click", finalizeCurrentSubmission);
+
+  render();
+  loadFinalSubmission();
+  loadAudioIndex();
+</script>

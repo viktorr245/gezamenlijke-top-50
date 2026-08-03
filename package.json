@@ -1,0 +1,23 @@
+{
+  "name": "gezamenlijke-top-50",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro check && astro build",
+    "preview": "node ./dist/server/entry.mjs",
+    "test": "playwright test"
+  },
+  "dependencies": {
+    "@astrojs/node": "^11.0.3",
+    "@phosphor-icons/web": "^2.1.2",
+    "astro": "^7.1.6"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^26.1.2",
+    "typescript": "^6.0.3"
+  }
+}

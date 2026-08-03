@@ -1,0 +1,27 @@
+---
+import "../styles/global.css";
+
+interface Props {
+  title: string;
+  description?: string;
+}
+
+const {
+  title,
+  description = "Kies samen de vijftig beste nummers voor drie cd's.",
+} = Astro.props;
+---
+
+<!doctype html>
+<html lang="nl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f4eedf" />
+    <meta name="description" content={description} />
+    <title>{title} · De gezamenlijke 50</title>
+  </head>
+  <body>
+    <slot />
+  </body>
+</html>

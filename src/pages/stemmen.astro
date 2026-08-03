@@ -1,0 +1,271 @@
+---
+import AppShell from "../components/AppShell.astro";
+import ProgressMarks from "../components/ProgressMarks.astro";
+---
+
+<AppShell active="stemmen" title="Stemmen">
+  <section class="vote-page" aria-labelledby="vote-title">
+    <div class="vote-heading">
+      <div>
+        <p class="eyebrow">Vergelijking</p>
+        <h1 id="vote-title">Kies wat je écht<br />nog een keer wilt horen.</h1>
+      </div>
+      <div class="vote-progress" aria-label="Voortgang van de stemming">
+        <p><strong id="vote-count">0</strong><span>van 120</span></p>
+        <ProgressMarks total={120} current={0} id="vote-progress-marks" />
+      </div>
+    </div>
+
+    <div class="vote-gate" id="vote-gate" role="status">
+      <span class="search-loader" aria-hidden="true"></span>
+      <h2>Vergelijkingen laden…</h2>
+    </div>
+
+    <div class="vote-grid" id="vote-grid" hidden>
+      {["left", "right"].map((side) => (
+        <article class:list={["vote-choice", `vote-choice--${side}`]} data-choice={side}>
+          <div class="vote-meta">
+            <h2 data-title></h2>
+            <p data-artist></p>
+          </div>
+          <div class="vote-cover">
+            <img data-cover src="" alt="" width="600" height="600" />
+          </div>
+          <div class="track-player" data-player>
+            <button class="player-toggle" type="button" data-play aria-pressed="false">
+              <i class="ph ph-play" aria-hidden="true"></i>
+            </button>
+            <label class="sr-only" for={`seek-${side}`}>Positie in het nummer</label>
+            <input class="player-seek" id={`seek-${side}`} data-seek type="range" min="0" max="1" step="0.1" value="0" />
+            <output class="player-time" data-time for={`seek-${side}`}>0:00</output>
+          </div>
+          <button class="outlined-action vote-action" type="button" data-vote>Deze kiezen</button>
+        </article>
+      ))}
+      <div class="versus" aria-hidden="true"><span>of</span></div>
+    </div>
+
+    <div class="vote-footer-actions">
+      <button class="text-action" id="undo-vote" type="button" hidden>
+        <i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i> Vorige keuze terugnemen
+      </button>
+      <p class="live-message" id="vote-message" role="status" aria-live="polite"></p>
+    </div>
+  </section>
+</AppShell>
+
+<script>
+  import { formatDuration, type Track } from "../data/tracks";
+  import { getActiveMember } from "../scripts/member-session";
+
+  type VotingPayload = {
+    status: {
+      readyForVoting: boolean;
+      votingComplete: boolean;
+      finalizedCount: number;
+      members: Array<{ memberId: string; trackCount: number; audioCount: number; finalized: boolean; voteCount: number; votingDone: boolean }>;
+    };
+    member: { voteCount: number; votingDone: boolean };
+    comparison: { id: string; leftId: string; rightId: string } | null;
+    tracks: { left: Track; right: Track } | null;
+    canUndo: boolean;
+  };
+
+  const memberId = getActiveMember();
+  const cards = Array.from(document.querySelectorAll<HTMLElement>("[data-choice]"));
+  const grid = document.querySelector<HTMLElement>("#vote-grid")!;
+  const gate = document.querySelector<HTMLElement>("#vote-gate")!;
+  const count = document.querySelector<HTMLElement>("#vote-count")!;
+  const marks = Array.from(document.querySelectorAll<HTMLElement>("#vote-progress-marks .progress-mark"));
+  const undoButton = document.querySelector<HTMLButtonElement>("#undo-vote")!;
+  const message = document.querySelector<HTMLElement>("#vote-message")!;
+  const audio = new Audio();
+  const positions = new Map<string, number>();
+  let activeCard: HTMLElement | undefined;
+  let payload: VotingPayload | undefined;
+  let busy = false;
+
+  function escapeHtml(value: unknown): string {
+    return String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character]!);
+  }
+
+  function trackFor(card: HTMLElement): Track | undefined {
+    if (!payload?.tracks) return undefined;
+    return card.dataset.choice === "left" ? payload.tracks.left : payload.tracks.right;
+  }
+
+  function setPosition(card: HTMLElement, value: number, durationValue?: number) {
+    const track = trackFor(card);
+    if (!track) return;
+    const duration = Number.isFinite(durationValue) && (durationValue ?? 0) > 0 ? durationValue! : track.duration;
+    const position = Math.max(0, Math.min(value, duration));
+    positions.set(track.id, position);
+    const seek = card.querySelector<HTMLInputElement>("[data-seek]")!;
+    seek.max = String(duration);
+    seek.value = String(position);
+    seek.style.setProperty("--seek-progress", `${duration ? position / duration * 100 : 0}%`);
+    seek.setAttribute("aria-valuetext", `${formatDuration(Math.floor(position))} van ${formatDuration(Math.floor(duration))}`);
+    card.querySelector<HTMLOutputElement>("[data-time]")!.textContent = formatDuration(Math.floor(position));
+  }
+
+  function setPlaying(card: HTMLElement, playing: boolean) {
+    const track = trackFor(card);
+    const button = card.querySelector<HTMLButtonElement>("[data-play]")!;
+    button.setAttribute("aria-pressed", String(playing));
+    button.setAttribute("aria-label", `${playing ? "Pauzeer" : "Speel"} ${track?.title ?? "dit nummer"}`);
+    button.querySelector("i")!.className = `ph ph-${playing ? "pause" : "play"}`;
+    card.classList.toggle("is-playing", playing);
+  }
+
+  function stopAudio(reset = false) {
+    if (activeCard) {
+      const track = trackFor(activeCard);
+      if (track) positions.set(track.id, reset ? 0 : audio.currentTime);
+      setPlaying(activeCard, false);
+      if (reset) setPosition(activeCard, 0);
+    }
+    audio.pause();
+    if (reset) audio.removeAttribute("src");
+    activeCard = undefined;
+  }
+
+  async function toggleAudio(card: HTMLElement) {
+    const track = trackFor(card);
+    if (!track || busy) return;
+    if (activeCard === card && !audio.paused) {
+      stopAudio();
+      return;
+    }
+    stopAudio();
+    activeCard = card;
+    audio.src = `/api/audio/${encodeURIComponent(track.id)}`;
+    audio.load();
+    const position = positions.get(track.id) ?? 0;
+    audio.addEventListener("loadedmetadata", () => {
+      if (position > 0 && position < audio.duration) audio.currentTime = position;
+      setPosition(card, audio.currentTime, audio.duration);
+    }, { once: true });
+    try {
+      await audio.play();
+      setPlaying(card, true);
+    } catch {
+      activeCard = undefined;
+      setPlaying(card, false);
+      message.textContent = "Dit audiobestand kan niet worden afgespeeld.";
+    }
+  }
+
+  function renderGate(next: VotingPayload) {
+    grid.hidden = true;
+    gate.hidden = false;
+    const missing = next.status.members.filter((status) => !status.finalized || status.audioCount < 20);
+    if (!next.status.readyForVoting) {
+      gate.innerHTML = `
+        <p class="eyebrow">Nog niet gestart</p>
+        <h2>Iedereen maakt eerst zijn 20 compleet.</h2>
+        <p>${next.status.finalizedCount} van 5 inzendingen zijn definitief. Stemmen opent automatisch zodra alle honderd audiobestanden klaarstaan.</p>
+        <ul>${missing.map((status) => `<li><strong>${status.memberId[0].toUpperCase() + status.memberId.slice(1)}</strong><span>${status.trackCount}/20 nummers · ${status.audioCount}/20 audio</span></li>`).join("")}</ul>`;
+    } else {
+      gate.innerHTML = `
+        <p class="eyebrow">Klaar</p>
+        <h2>Jouw 120 keuzes zijn opgeslagen.</h2>
+        <p>${next.status.votingComplete ? "Iedereen is klaar. De definitieve ranglijst staat nu vast." : "Je hoeft niets meer te doen; de anderen kunnen in hun eigen tijd afronden."}</p>
+        <a class="outlined-action gate-link" href="/ranglijst">Bekijk de ranglijst</a>`;
+    }
+  }
+
+  function render(next: VotingPayload) {
+    payload = next;
+    stopAudio(true);
+    count.textContent = String(next.member.voteCount);
+    marks.forEach((mark, index) => mark.classList.toggle("complete", index < next.member.voteCount));
+    undoButton.hidden = !next.canUndo;
+    message.textContent = "";
+    if (!next.status.readyForVoting || !next.comparison || !next.tracks) {
+      renderGate(next);
+      return;
+    }
+    gate.hidden = true;
+    grid.hidden = false;
+    for (const card of cards) {
+      const side = card.dataset.choice as "left" | "right";
+      const track = next.tracks[side];
+      card.dataset.trackId = track.id;
+      card.classList.remove("is-selected", "is-rejected");
+      card.querySelector<HTMLElement>("[data-title]")!.textContent = track.title;
+      card.querySelector<HTMLElement>("[data-artist]")!.textContent = track.artist;
+      const cover = card.querySelector<HTMLImageElement>("[data-cover]")!;
+      cover.src = track.cover;
+      cover.alt = `Albumhoes voor ${track.title} van ${track.artist}`;
+      setPosition(card, positions.get(track.id) ?? 0);
+      setPlaying(card, false);
+      card.querySelectorAll<HTMLButtonElement | HTMLInputElement>("button, input").forEach((control) => control.disabled = false);
+    }
+  }
+
+  async function request(method: "POST" | "DELETE", body?: unknown) {
+    const response = await fetch(`/api/voting/${memberId}`, {
+      method,
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const result = await response.json() as VotingPayload & { error?: string };
+    if (!response.ok) throw new Error(result.error ?? "De keuze kon niet worden opgeslagen.");
+    return result;
+  }
+
+  async function choose(card: HTMLElement) {
+    const comparison = payload?.comparison;
+    const winnerId = card.dataset.trackId;
+    if (busy || !comparison || !winnerId) return;
+    busy = true;
+    stopAudio(true);
+    card.classList.add("is-selected");
+    cards.find((other) => other !== card)?.classList.add("is-rejected");
+    cards.forEach((item) => item.querySelectorAll<HTMLButtonElement | HTMLInputElement>("button, input").forEach((control) => control.disabled = true));
+    try {
+      const next = await request("POST", { comparisonId: comparison.id, winnerId });
+      window.setTimeout(() => render(next), 220);
+    } catch (error) {
+      message.textContent = error instanceof Error ? error.message : "De keuze kon niet worden opgeslagen.";
+      cards.forEach((item) => item.querySelectorAll<HTMLButtonElement | HTMLInputElement>("button, input").forEach((control) => control.disabled = false));
+    } finally {
+      window.setTimeout(() => busy = false, 220);
+    }
+  }
+
+  cards.forEach((card) => {
+    card.querySelector<HTMLButtonElement>("[data-play]")!.addEventListener("click", () => toggleAudio(card));
+    card.querySelector<HTMLInputElement>("[data-seek]")!.addEventListener("input", (event) => {
+      const position = Number((event.currentTarget as HTMLInputElement).value);
+      setPosition(card, position, Number((event.currentTarget as HTMLInputElement).max));
+      if (activeCard === card) audio.currentTime = position;
+    });
+    card.querySelector<HTMLButtonElement>("[data-vote]")!.addEventListener("click", () => choose(card));
+  });
+
+  audio.addEventListener("timeupdate", () => {
+    if (activeCard) setPosition(activeCard, audio.currentTime, audio.duration);
+  });
+  audio.addEventListener("ended", () => {
+    if (activeCard) setPosition(activeCard, 0, audio.duration);
+    stopAudio();
+  });
+  undoButton.addEventListener("click", async () => {
+    if (busy) return;
+    busy = true;
+    try { render(await request("DELETE")); }
+    catch (error) { message.textContent = error instanceof Error ? error.message : "Terugdraaien mislukt."; }
+    finally { busy = false; }
+  });
+
+  fetch(`/api/voting/${memberId}`, { headers: { Accept: "application/json" } })
+    .then(async (response) => {
+      const result = await response.json() as VotingPayload & { error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Vergelijkingen laden mislukt.");
+      render(result);
+    })
+    .catch((error) => {
+      gate.innerHTML = `<p class="eyebrow">Niet beschikbaar</p><h2>Vergelijkingen laden lukt niet.</h2><p>${escapeHtml(error instanceof Error ? error.message : "Probeer het later opnieuw.")}</p>`;
+    });
+</script>

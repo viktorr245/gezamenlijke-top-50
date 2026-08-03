@@ -1,0 +1,139 @@
+---
+import { members } from "../data/tracks";
+import BaseLayout from "../layouts/BaseLayout.astro";
+
+type PageId = "stemmen" | "mijn-20" | "ranglijst" | "cds";
+
+interface Props {
+  active: PageId;
+  title: string;
+}
+
+const { active, title } = Astro.props;
+const navigation: { id: PageId; label: string; href: string }[] = [
+  { id: "stemmen", label: "Stemmen", href: "/stemmen" },
+  { id: "mijn-20", label: "Mijn 20", href: "/mijn-20" },
+  { id: "ranglijst", label: "Ranglijst", href: "/ranglijst" },
+  { id: "cds", label: "De cd’s", href: "/cds" },
+];
+---
+
+<BaseLayout title={title}>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Hoofdnavigatie">
+      <a class="brand" href="/stemmen">De gezamenlijke 50</a>
+
+      <nav class="side-nav">
+        {navigation.map((item) => (
+          <a
+            class:list={["nav-link", { active: item.id === active }]}
+            href={item.href}
+            aria-current={item.id === active ? "page" : undefined}
+          >
+            {item.label}
+          </a>
+        ))}
+      </nav>
+
+      <p class="member-list-label">Jij bent</p>
+      <ul class="member-list" aria-label="Kies deelnemer">
+        {members.map((member) => (
+          <li>
+            <button type="button" data-member-id={member.id} aria-pressed="false">
+              <span class="member-dot" style={`--member-color:${member.color}`} aria-hidden="true"></span>
+              <span>{member.name}</span>
+              <span class="member-state" data-member-state={member.id} aria-hidden="true"></span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </aside>
+
+    <header class="mobile-header">
+      <a class="brand" href="/stemmen">De gezamenlijke 50</a>
+      <label class="mobile-member-picker">
+        <span class="sr-only">Jij bent</span>
+        <select data-member-select aria-label="Kies deelnemer">
+          {members.map((member) => <option value={member.id}>{member.name}</option>)}
+        </select>
+      </label>
+    </header>
+
+    <main class:list={["page", `page--${active}`]}>
+      <slot />
+    </main>
+
+    <nav class="bottom-nav" aria-label="Hoofdnavigatie">
+      {navigation.map((item) => (
+        <a
+          class:list={["nav-link", { active: item.id === active }]}
+          href={item.href}
+          aria-current={item.id === active ? "page" : undefined}
+        >
+          {item.label}
+        </a>
+      ))}
+    </nav>
+  </div>
+
+  <dialog class="identity-dialog" id="identity-dialog" aria-labelledby="identity-title">
+    <p class="eyebrow">Welkom</p>
+    <h2 id="identity-title">Wie ben jij?</h2>
+    <p>Kies je eigen naam. Zo komen je nummers en keuzes op de juiste plek terecht.</p>
+    <div>
+      {members.map((member) => (
+        <button class="outlined-action" type="button" data-identify-member={member.id}>
+          <span class="member-dot" style={`--member-color:${member.color}`} aria-hidden="true"></span>{member.name}
+        </button>
+      ))}
+    </div>
+  </dialog>
+</BaseLayout>
+
+<script>
+  import { isMemberId } from "../data/tracks";
+
+  const MEMBER_KEY = "gezamenlijke-top-50-member";
+  const stored = localStorage.getItem(MEMBER_KEY);
+  const hasStoredIdentity = isMemberId(stored);
+  const activeMember = isMemberId(stored) ? stored : "viktor";
+  localStorage.setItem(MEMBER_KEY, activeMember);
+
+  function selectMember(memberId: string, reload = false) {
+    if (!isMemberId(memberId)) return;
+    localStorage.setItem(MEMBER_KEY, memberId);
+    document.querySelectorAll<HTMLButtonElement>("[data-member-id]").forEach((button) => {
+      const selected = button.dataset.memberId === memberId;
+      button.classList.toggle("is-current", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
+    const select = document.querySelector<HTMLSelectElement>("[data-member-select]");
+    if (select) select.value = memberId;
+    if (reload) window.location.reload();
+  }
+
+  document.querySelectorAll<HTMLButtonElement>("[data-member-id]").forEach((button) => {
+    button.addEventListener("click", () => selectMember(button.dataset.memberId ?? "", true));
+  });
+  document.querySelector<HTMLSelectElement>("[data-member-select]")?.addEventListener("change", (event) => {
+    selectMember((event.currentTarget as HTMLSelectElement).value, true);
+  });
+  selectMember(activeMember);
+  const identityDialog = document.querySelector<HTMLDialogElement>("#identity-dialog");
+  if (!hasStoredIdentity && identityDialog) identityDialog.showModal();
+  identityDialog?.addEventListener("cancel", (event) => event.preventDefault());
+  identityDialog?.querySelectorAll<HTMLButtonElement>("[data-identify-member]").forEach((button) => {
+    button.addEventListener("click", () => selectMember(button.dataset.identifyMember ?? "", true));
+  });
+
+  fetch("/api/status", { headers: { Accept: "application/json" } })
+    .then((response) => response.ok ? response.json() : Promise.reject())
+    .then((payload: { status?: { members?: Array<{ memberId: string; finalized: boolean; votingDone: boolean; trackCount: number }> } }) => {
+      for (const status of payload.status?.members ?? []) {
+        const state = document.querySelector<HTMLElement>(`[data-member-state="${CSS.escape(status.memberId)}"]`);
+        if (!state) continue;
+        state.textContent = status.votingDone ? "klaar" : status.finalized ? "ingeleverd" : `${status.trackCount}/20`;
+      }
+    })
+    .catch(() => undefined);
+</script>

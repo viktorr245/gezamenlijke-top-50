@@ -1,0 +1,15 @@
+---
+interface Props {
+  total: number;
+  current: number;
+  id?: string;
+}
+
+const { total, current, id } = Astro.props;
+---
+
+<div class="progress-marks" id={id} aria-hidden="true">
+  {Array.from({ length: total }, (_, index) => (
+    <span class:list={["progress-mark", { complete: index < current }]}></span>
+  ))}
+</div>
