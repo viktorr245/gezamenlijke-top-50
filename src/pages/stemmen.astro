@@ -82,6 +82,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   const audio = new Audio();
   const positions = new Map<string, number>();
   let activeCard: HTMLElement | undefined;
+  let audioGeneration = 0;
   let payload: VotingPayload | undefined;
   let busy = false;
 
@@ -118,6 +119,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   }
 
   function stopAudio(reset = false) {
+    audioGeneration += 1;
     if (activeCard) {
       const track = trackFor(activeCard);
       if (track) positions.set(track.id, reset ? 0 : audio.currentTime);
@@ -137,18 +139,32 @@ import ProgressMarks from "../components/ProgressMarks.astro";
       return;
     }
     stopAudio();
+    const generation = audioGeneration;
     activeCard = card;
     audio.src = `/api/audio/${encodeURIComponent(track.id)}`;
+    const expectedSource = audio.src;
     audio.load();
     const position = positions.get(track.id) ?? 0;
     audio.addEventListener("loadedmetadata", () => {
+      if (generation !== audioGeneration || activeCard !== card || audio.src !== expectedSource) return;
       if (position > 0 && position < audio.duration) audio.currentTime = position;
       setPosition(card, audio.currentTime, audio.duration);
     }, { once: true });
+    audio.addEventListener("ended", () => {
+      if (generation !== audioGeneration || activeCard !== card || audio.src !== expectedSource) return;
+      stopAudio(true);
+    }, { once: true });
+    audio.addEventListener("error", () => {
+      if (generation !== audioGeneration || activeCard !== card || audio.src !== expectedSource) return;
+      stopAudio();
+      message.textContent = "Dit audiobestand kan niet worden afgespeeld.";
+    }, { once: true });
     try {
       await audio.play();
+      if (generation !== audioGeneration || activeCard !== card || audio.src !== expectedSource) return;
       setPlaying(card, true);
     } catch {
+      if (generation !== audioGeneration || activeCard !== card) return;
       activeCard = undefined;
       setPlaying(card, false);
       message.textContent = "Dit audiobestand kan niet worden afgespeeld.";
@@ -236,12 +252,15 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     cards.forEach((item) => item.querySelectorAll<HTMLButtonElement | HTMLInputElement>("button, input").forEach((control) => control.disabled = true));
     try {
       const next = await request("POST", { comparisonId: comparison.id, winnerId });
-      window.setTimeout(() => render(next), 220);
+      window.setTimeout(() => {
+        render(next);
+        busy = false;
+      }, 220);
     } catch (error) {
       message.textContent = error instanceof Error ? error.message : "De keuze kon niet worden opgeslagen.";
+      cards.forEach((item) => item.classList.remove("is-selected", "is-rejected"));
       cards.forEach((item) => item.querySelectorAll<HTMLButtonElement | HTMLInputElement>("button, input").forEach((control) => control.disabled = false));
-    } finally {
-      window.setTimeout(() => busy = false, 220);
+      busy = false;
     }
   }
 
@@ -257,9 +276,6 @@ import ProgressMarks from "../components/ProgressMarks.astro";
 
   audio.addEventListener("timeupdate", () => {
     if (activeCard) setPosition(activeCard, audio.currentTime, audio.duration);
-  });
-  audio.addEventListener("ended", () => {
-    stopAudio(true);
   });
   async function undo() {
     if (busy) return;

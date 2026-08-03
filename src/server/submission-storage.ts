@@ -64,7 +64,11 @@ function safeTrack(value: unknown, owner: MemberId): Track | undefined {
   const artist = optionalString(track.artist, 200);
   const cover = safeUrl(track.cover, true);
   if (!id || !/^[a-zA-Z0-9_-]+$/.test(id) || !title || !artist || !cover || !Number.isFinite(track.duration)) return undefined;
-  if (track.source === "itunes" && (!/^\d+$/.test(track.sourceId ?? "") || id !== `itunes-${track.sourceId}`)) return undefined;
+  if (track.source === "itunes" && (
+    typeof track.sourceId !== "string"
+    || !/^\d+$/.test(track.sourceId)
+    || id !== `itunes-${track.sourceId}`
+  )) return undefined;
   if (track.source === "manual" && !id.startsWith(`manual-${owner}-`)) return undefined;
   if (track.source && track.source !== "itunes" && track.source !== "manual") return undefined;
 

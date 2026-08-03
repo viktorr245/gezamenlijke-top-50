@@ -34,7 +34,7 @@ const pins = Object.fromEntries(participants.map(([id]) => {
 const secret = randomBytes(48).toString("base64url");
 const environment = [
   `AUTH_SECRET=${secret}`,
-  `MEMBER_PINS='${JSON.stringify(pins)}'`,
+  `MEMBER_PINS=${JSON.stringify(pins)}`,
   "",
 ].join("\n");
 const pinSheet = [

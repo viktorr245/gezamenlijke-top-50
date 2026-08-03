@@ -1,0 +1,14 @@
+.git
+.env
+.env.*
+!.env.example
+dist
+docs
+node_modules
+pincodes.local.txt
+playwright-report
+playwright.config.ts
+qa
+storage
+test-results
+tests

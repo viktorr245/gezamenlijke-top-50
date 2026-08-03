@@ -66,6 +66,12 @@ function cookieValue(request: Request): string | undefined {
   return undefined;
 }
 
+function isSecureRequest(request: Request): boolean {
+  if (new URL(request.url).protocol === "https:") return true;
+  return process.env.TRUST_PROXY === "true"
+    && request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase() === "https";
+}
+
 export function isAuthenticationEnabled(): boolean {
   return pinConfiguration() !== null;
 }
@@ -97,12 +103,12 @@ export function sessionCookie(memberId: MemberId, request: Request): string {
   const expiresAt = Math.floor(Date.now() / 1000) + SESSION_SECONDS;
   const payload = `${memberId}.${expiresAt}`;
   const value = `${payload}.${signature(payload)}`;
-  const secure = new URL(request.url).protocol === "https:" || request.headers.get("x-forwarded-proto") === "https" ? "; Secure" : "";
+  const secure = isSecureRequest(request) ? "; Secure" : "";
   return `${COOKIE_NAME}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_SECONDS}${secure}`;
 }
 
 export function expiredSessionCookie(request: Request): string {
-  const secure = new URL(request.url).protocol === "https:" || request.headers.get("x-forwarded-proto") === "https" ? "; Secure" : "";
+  const secure = isSecureRequest(request) ? "; Secure" : "";
   return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
 }
 

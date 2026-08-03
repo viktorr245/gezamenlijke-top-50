@@ -4,17 +4,13 @@ import { ensureBurnPackages, resolveBurnAudioSources, validateBurnCapacity } fro
 import { finalizeDiscLayout, getDiscLayout, saveDiscLayout } from "../../server/disc-layout-storage";
 import { loadGroupData } from "../../server/group-state";
 import { calculateRanking } from "../../server/ranking";
+import { isSameOrigin } from "../../server/request-security";
 
 export const prerender = false;
 
-function sameOrigin(request: Request): boolean {
-  const origin = request.headers.get("Origin");
-  return !origin || origin === new URL(request.url).origin;
-}
-
-function errorResponse(error: unknown) {
+function errorResponse(error: unknown, fallbackStatus = 400) {
   const message = error instanceof Error ? error.message : "De cd-indeling kon niet worden opgeslagen.";
-  return Response.json({ error: message }, { status: error instanceof AuthorizationError ? error.status : message.includes("al definitief") ? 409 : message.includes("schijfruimte") || message.includes("opslaglimiet") ? 507 : 400, headers: { "Cache-Control": "no-store" } });
+  return Response.json({ error: message }, { status: error instanceof AuthorizationError ? error.status : message.includes("al definitief") ? 409 : message.includes("schijfruimte") || message.includes("opslaglimiet") ? 507 : fallbackStatus, headers: { "Cache-Control": "no-store" } });
 }
 
 async function rankingData() {
@@ -41,12 +37,12 @@ export const GET: APIRoute = async () => {
       organizerId: "viktor",
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    return errorResponse(error);
+    return errorResponse(error, 500);
   }
 };
 
 export const PUT: APIRoute = async ({ request }) => {
-  if (!sameOrigin(request)) return Response.json({ error: "Ongeldige opslagaanvraag." }, { status: 403 });
+  if (!isSameOrigin(request)) return Response.json({ error: "Ongeldige opslagaanvraag." }, { status: 403 });
   try {
     const body = await request.json() as { memberId?: unknown; discs?: unknown };
     requireOrganizer(request, body.memberId);
@@ -60,7 +56,7 @@ export const PUT: APIRoute = async ({ request }) => {
 };
 
 export const POST: APIRoute = async ({ request }) => {
-  if (!sameOrigin(request)) return Response.json({ error: "Ongeldige aanvraag." }, { status: 403 });
+  if (!isSameOrigin(request)) return Response.json({ error: "Ongeldige aanvraag." }, { status: 403 });
   try {
     const body = await request.json().catch(() => ({})) as { memberId?: unknown };
     requireOrganizer(request, body.memberId);

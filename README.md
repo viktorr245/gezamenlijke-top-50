@@ -126,17 +126,35 @@ npm run preview
 
 Met `FFMPEG_PATH=/pad/naar/ffmpeg` en `FFPROBE_PATH=/pad/naar/ffprobe` kun je andere installaties aanwijzen.
 
+### Met Docker
+
+De meegeleverde `Dockerfile` bouwt de Astro-server en bevat FFmpeg, FFprobe en een container-healthcheck. Start hem met een blijvend opslagvolume en een zelf gegenereerde `.env`:
+
+```bash
+npm run auth:generate
+docker build -t gezamenlijke-top-50 .
+docker run --rm \
+  --env-file .env \
+  -e HOST=0.0.0.0 \
+  -e PORT=4321 \
+  -e STORAGE_DIR=/data \
+  -p 4321:4321 \
+  -v gezamenlijke-top-50-data:/data \
+  gezamenlijke-top-50
+```
+
+Gebruik in productie precies één container tegelijk. De JSON-opslag en schrijfwachtrijen zijn ontworpen voor één serverproces.
+
 ## Aanmelden en deelnemersrechten
 
 Voor een server die via internet bereikbaar is, stel je pincode-login in met twee omgevingsvariabelen:
 
 ```bash
-export AUTH_SECRET='een-willekeurige-geheime-waarde-van-minimaal-32-tekens'
-export MEMBER_PINS='{"viktor":"4829","daniel":"7316","keano":"2058","sander":"6941","jurjan":"3570"}'
+npm run auth:generate
 npm run preview
 ```
 
-Gebruik eigen, unieke pincodes; de waarden hierboven zijn alleen een voorbeeld. Zodra `MEMBER_PINS` is ingesteld:
+Dit maakt een niet-gecommitte `.env` met een willekeurig sessiegeheim en vijf unieke pincodes, plus `pincodes.local.txt` om de codes privé te verdelen. Zodra `MEMBER_PINS` is ingesteld:
 
 - moet iedere deelnemer zich aanmelden met naam en pincode;
 - bewaart de browser alleen een ondertekende `HttpOnly`-sessiecookie;
@@ -145,6 +163,10 @@ Gebruik eigen, unieke pincodes; de waarden hierboven zijn alleen een voorbeeld. 
 - worden niet-aangemelde pagina- en API-verzoeken geweigerd.
 
 `AUTH_SECRET` moet dan minimaal 32 tekens bevatten. `MEMBER_PINS` moet voor alle vijf deelnemers een unieke pincode van minimaal vier tekens bevatten. Na acht mislukte pogingen voor dezelfde deelnemer en hetzelfde IP-adres wacht de server vijftien minuten voordat nieuwe pogingen worden geaccepteerd. Die limiet leeft in het geheugen van één serverproces.
+
+Staat de website achter een eigen reverse proxy, zet dan `TRUST_PROXY=true` en configureer die proxy zo dat hij inkomende `X-Forwarded-For`- en `X-Real-IP`-headers **overschrijft**. Zonder deze garantie moet `TRUST_PROXY` uit blijven; de server gebruikt dan veilig het directe socketadres.
+
+Wanneer de proxy publieke HTTPS intern als HTTP doorstuurt, stel je daarnaast de exacte publieke origin in, bijvoorbeeld `PUBLIC_ORIGIN=https://degezamenlijke50.boe.moe`. Daarmee blijven de Origin-controles op schrijvende verzoeken correct achter de proxy. Geef alleen de origin op: geen pad, querystring of fragment.
 
 ## Opslag en back-ups
 

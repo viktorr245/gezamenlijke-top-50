@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import type { APIRoute } from "astro";
 import { getAudioAsset, removeAudio, saveAudio, validateTrackId } from "../../../server/audio-storage";
 import { AuthorizationError, requireMember } from "../../../server/auth";
+import { isSameOrigin } from "../../../server/request-security";
 import { getSubmission, saveDraftSubmission } from "../../../server/submission-storage";
 import { withSubmissionAudioLock } from "../../../server/submission-audio-lock";
 
@@ -10,11 +11,6 @@ export const prerender = false;
 
 function errorResponse(message: string, status: number) {
   return Response.json({ error: message }, { status, headers: { "Cache-Control": "no-store" } });
-}
-
-function sameOrigin(request: Request): boolean {
-  const origin = request.headers.get("Origin");
-  return !origin || origin === new URL(request.url).origin;
 }
 
 function requestedRange(header: string | null, size: number): { start: number; end: number } | undefined | null {
@@ -68,7 +64,7 @@ export const GET: APIRoute = async ({ params, request }) => {
 };
 
 export const POST: APIRoute = async ({ params, request }) => {
-  if (!sameOrigin(request)) return errorResponse("Ongeldige uploadaanvraag.", 403);
+  if (!isSameOrigin(request)) return errorResponse("Ongeldige uploadaanvraag.", 403);
   try {
     const trackId = validateTrackId(params.trackId);
     const form = await request.formData();
@@ -100,7 +96,7 @@ export const POST: APIRoute = async ({ params, request }) => {
 };
 
 export const DELETE: APIRoute = async ({ params, request }) => {
-  if (!sameOrigin(request)) return errorResponse("Ongeldige verwijderaanvraag.", 403);
+  if (!isSameOrigin(request)) return errorResponse("Ongeldige verwijderaanvraag.", 403);
   try {
     const trackId = validateTrackId(params.trackId);
     const memberId = requireMember(request, new URL(request.url).searchParams.get("memberId"));

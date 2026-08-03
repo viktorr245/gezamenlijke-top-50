@@ -1698,6 +1698,10 @@ h1 {
   font-size: 19px;
 }
 
+.submission-load-retry {
+  min-height: 44px;
+}
+
 .submission-page.is-final .add-track-form,
 .submission-page.is-final .save-submission {
   display: none;
@@ -2161,6 +2165,11 @@ h1 {
 .disc-footer p {
   margin: 18px 0 0;
   font-size: 19px;
+}
+
+#retry-layout-save {
+  min-height: 44px;
+  margin-top: 8px;
 }
 
 .burn-packages {
@@ -3549,6 +3558,11 @@ h1 {
 
   .mobile-header .brand {
     font-size: 14px;
+  }
+
+  .ranking-heading h1,
+  .discs-heading h1 {
+    white-space: normal;
   }
 
   .member-dots {

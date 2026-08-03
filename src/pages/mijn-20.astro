@@ -66,6 +66,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     <div class="submission-footer">
       <button class="outlined-action save-submission" type="button" id="save-submission" disabled>Inzending definitief maken</button>
       <p id="spots-left">Inzending controleren…</p>
+      <button class="text-action submission-load-retry" type="button" id="retry-submission-load" hidden>Opnieuw proberen</button>
     </div>
   </section>
 
@@ -146,6 +147,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   const message = document.querySelector<HTMLElement>("#submission-message")!;
   const spotsLeft = document.querySelector<HTMLElement>("#spots-left")!;
   const saveButton = document.querySelector<HTMLButtonElement>("#save-submission")!;
+  const retrySubmissionLoad = document.querySelector<HTMLButtonElement>("#retry-submission-load")!;
   const searchCache = new Map<string, Track[]>();
   const currentSearchTracks = new Map<string, Track>();
   const audioRecords = new Map<string, AudioRecord>();
@@ -158,11 +160,19 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   let searchVersion = 0;
   let activePreviewId: string | undefined;
   let activeSubmissionId: string | undefined;
+  let previewGeneration = 0;
+  let submissionPlaybackGeneration = 0;
   let audioIndexLoaded = false;
   let audioIndexFailed = false;
   let submissionStatusLoaded = false;
+  let submissionStatusFailed = false;
   let finalSubmission: FinalSubmission | undefined;
   let addingTrack = false;
+  let finalizingSubmission = false;
+
+  function submissionBusy(): boolean {
+    return addingTrack || finalizingSubmission || removingTracks.size > 0 || uploadingTracks.size > 0;
+  }
 
   function escapeHtml(value: unknown): string {
     return String(value).replace(/[&<>"']/g, (character) => ({
@@ -217,17 +227,8 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     return request;
   }
 
-  function saveState() {
-    if (!submissionStatusLoaded || finalSubmission) return;
-    const tracks = state.submissionIds.map(getTrack).filter((track): track is Track => Boolean(track));
-    void persistDraft(tracks).catch((error) => {
-      setMessage(error instanceof Error ? error.message : "De lijst kon niet worden opgeslagen.", true);
-      loadFinalSubmission();
-    });
-  }
-
   async function addTrack(track: Track) {
-    if (addingTrack || isSubmissionLocked() || state.submissionIds.length >= 20 || isTrackSelected(track)) return false;
+    if (submissionBusy() || isSubmissionLocked() || state.submissionIds.length >= 20 || isTrackSelected(track)) return false;
     const currentTracks = state.submissionIds.map(getTrack).filter((candidate): candidate is Track => Boolean(candidate));
     addingTrack = true;
     render();
@@ -292,6 +293,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
 
   function audioControls(track: Track): string {
     const record = audioRecords.get(track.id);
+    const uploadDisabled = isSubmissionLocked() || submissionBusy();
     const input = `
       <input
         class="audio-file-input"
@@ -299,6 +301,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
         data-audio-file
         accept="audio/*,.m4a,.flac"
         aria-label="Kies een audiobestand voor ${escapeHtml(track.title)}"
+        ${uploadDisabled ? "disabled" : ""}
       />`;
 
     if (!audioIndexLoaded) {
@@ -330,7 +333,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
             <i class="ph ph-warning-circle" aria-hidden="true"></i>
             <span><strong>Audio ontbreekt</strong><small>Sleep audio hierheen of kies een bestand.</small></span>
           </span>
-          <button class="outlined-action audio-upload-action" type="button" data-upload-audio>
+          <button class="outlined-action audio-upload-action" type="button" data-upload-audio ${uploadDisabled ? "disabled" : ""}>
             <i class="ph ph-upload-simple" aria-hidden="true"></i><span>Audio toevoegen</span>
           </button>
           ${input}
@@ -340,7 +343,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     const position = playbackPositions.get(track.id) ?? 0;
     const duration = record.duration ?? track.duration;
     return `
-      <div class="submission-audio submission-audio--ready" data-row-player ${finalSubmission ? "" : "data-audio-drop"}>
+      <div class="submission-audio submission-audio--ready" data-row-player ${finalSubmission || uploadDisabled ? "" : "data-audio-drop"}>
         <span class="audio-ready-label" title="${escapeHtml(record.originalName)}">
           <i class="ph ph-check-circle" aria-hidden="true"></i>
           <span><strong>Audio toegevoegd</strong><small>${escapeHtml(record.originalName)}${finalSubmission ? "" : " · sleep om te vervangen"}</small></span>
@@ -363,7 +366,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
           />
           <output class="row-audio-time" for="audio-seek-${escapeHtml(track.id)}" data-row-time>${formatDuration(Math.floor(position))} / ${formatDuration(duration)}</output>
         </div>
-        ${finalSubmission ? "" : `<button class="text-action audio-replace-action" type="button" data-upload-audio>Vervang</button>${input}`}
+        ${finalSubmission ? "" : `<button class="text-action audio-replace-action" type="button" data-upload-audio ${uploadDisabled ? "disabled" : ""}>Vervang</button>${input}`}
       </div>`;
   }
 
@@ -399,7 +402,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   }
 
   function openManualDialog() {
-    if (isSubmissionLocked() || state.submissionIds.length >= 20 || addingTrack) return;
+    if (isSubmissionLocked() || state.submissionIds.length >= 20 || submissionBusy()) return;
     setSearchOpen(false);
     manualError.textContent = "";
     manualDialog.showModal();
@@ -523,6 +526,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   }
 
   function stopPreview(reset = true) {
+    previewGeneration += 1;
     if (activePreviewId) setPreviewButton(activePreviewId, false);
     previewAudio.pause();
     if (reset) previewAudio.removeAttribute("src");
@@ -538,14 +542,28 @@ import ProgressMarks from "../components/ProgressMarks.astro";
 
     stopPreview();
     stopSubmissionPlayback();
+    const generation = previewGeneration;
     activePreviewId = track.id;
     previewAudio.src = track.previewUrl;
+    const expectedSource = previewAudio.src;
     previewAudio.volume = 0.85;
+    previewAudio.addEventListener("ended", () => {
+      if (generation !== previewGeneration || activePreviewId !== track.id || previewAudio.src !== expectedSource) return;
+      stopPreview();
+    }, { once: true });
+    previewAudio.addEventListener("error", () => {
+      if (generation !== previewGeneration || activePreviewId !== track.id || previewAudio.src !== expectedSource) return;
+      stopPreview();
+      setMessage("De preview van dit nummer kan niet worden afgespeeld.", true);
+    }, { once: true });
     try {
       await previewAudio.play();
+      if (generation !== previewGeneration || activePreviewId !== track.id || previewAudio.src !== expectedSource) return;
       setPreviewButton(track.id, true);
     } catch {
+      if (generation !== previewGeneration || activePreviewId !== track.id) return;
       activePreviewId = undefined;
+      setPreviewButton(track.id, false);
       setMessage("De preview van dit nummer kan niet worden afgespeeld.", true);
     }
   }
@@ -587,6 +605,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   }
 
   function stopSubmissionPlayback(reset = false) {
+    submissionPlaybackGeneration += 1;
     const trackId = activeSubmissionId;
     if (trackId && !submissionAudio.paused) playbackPositions.set(trackId, submissionAudio.currentTime);
     submissionAudio.pause();
@@ -608,23 +627,39 @@ import ProgressMarks from "../components/ProgressMarks.astro";
 
     stopPreview();
     stopSubmissionPlayback();
+    const generation = submissionPlaybackGeneration;
     activeSubmissionId = trackId;
     const record = audioRecords.get(trackId);
-      const source = record?.url ?? track.previewUrl;
-      try {
+    const source = record?.url ?? track.previewUrl;
+    try {
       if (!source) throw new Error("Voeg eerst het audiobestand toe.");
 
       const position = record ? playbackPositions.get(trackId) ?? 0 : 0;
       submissionAudio.src = source;
+      const expectedSource = submissionAudio.src;
       submissionAudio.load();
       submissionAudio.addEventListener("loadedmetadata", () => {
+        if (generation !== submissionPlaybackGeneration || activeSubmissionId !== trackId || submissionAudio.src !== expectedSource) return;
         const duration = Number.isFinite(submissionAudio.duration) ? submissionAudio.duration : track.duration;
         if (position > 0 && position < duration) submissionAudio.currentTime = position;
         updateSubmissionTimeline(trackId, submissionAudio.currentTime, duration);
       }, { once: true });
+      submissionAudio.addEventListener("ended", () => {
+        if (generation !== submissionPlaybackGeneration || activeSubmissionId !== trackId || submissionAudio.src !== expectedSource) return;
+        const duration = submissionAudio.duration;
+        stopSubmissionPlayback(true);
+        updateSubmissionTimeline(trackId, 0, duration);
+      }, { once: true });
+      submissionAudio.addEventListener("error", () => {
+        if (generation !== submissionPlaybackGeneration || activeSubmissionId !== trackId || submissionAudio.src !== expectedSource) return;
+        stopSubmissionPlayback();
+        setMessage("Dit audiobestand kan niet worden afgespeeld.", true);
+      }, { once: true });
       await submissionAudio.play();
+      if (generation !== submissionPlaybackGeneration || activeSubmissionId !== trackId || submissionAudio.src !== expectedSource) return;
       setSubmissionPlaying(trackId, true);
     } catch {
+      if (generation !== submissionPlaybackGeneration || activeSubmissionId !== trackId) return;
       activeSubmissionId = undefined;
       setSubmissionPlaying(trackId, false);
       setMessage("Dit audiobestand kan niet worden afgespeeld.", true);
@@ -653,11 +688,15 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   }
 
   async function loadFinalSubmission() {
+    submissionStatusLoaded = false;
+    submissionStatusFailed = false;
+    render();
     try {
       const response = await fetch(`/api/submissions/${memberId}`, { headers: { Accept: "application/json" } });
       const payload = await response.json() as { submission?: unknown; error?: string };
       if (response.ok && payload.submission == null) {
         submissionStatusLoaded = true;
+        setMessage("");
         render();
         return;
       }
@@ -669,14 +708,17 @@ import ProgressMarks from "../components/ProgressMarks.astro";
         state.customTracks[track.id] = track;
       }
       submissionStatusLoaded = true;
+      setMessage("");
       render();
     } catch (error) {
+      submissionStatusFailed = true;
+      render();
       setMessage(error instanceof Error ? error.message : "De definitieve status kon niet worden geladen.", true);
     }
   }
 
   async function finalizeCurrentSubmission() {
-    if (isSubmissionLocked() || state.submissionIds.length !== 20) return;
+    if (isSubmissionLocked() || submissionBusy() || state.submissionIds.length !== 20) return;
     const tracks = state.submissionIds.map(getTrack).filter((track): track is Track => Boolean(track));
     if (tracks.length !== 20) {
       setMessage("Een of meer nummers konden niet worden geladen.", true);
@@ -689,8 +731,8 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     }
     if (!window.confirm("Hierna staan deze twintig nummers definitief vast. Doorgaan?")) return;
 
-    saveButton.disabled = true;
-    saveButton.textContent = "Definitief maken…";
+    finalizingSubmission = true;
+    render();
     try {
       await draftSaveQueue;
       const response = await fetch(`/api/submissions/${memberId}`, {
@@ -705,12 +747,13 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "De inzending kon niet definitief worden gemaakt.", true);
     } finally {
+      finalizingSubmission = false;
       render();
     }
   }
 
   async function uploadAudio(track: Track, file: File) {
-    if (isSubmissionLocked()) return;
+    if (isSubmissionLocked() || submissionBusy()) return;
     if (!file.type.startsWith("audio/")) {
       setMessage("Kies een geldig audiobestand.", true);
       return;
@@ -746,25 +789,20 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   }
 
   async function removeTrack(trackId: string) {
-    if (isSubmissionLocked() || removingTracks.has(trackId)) return;
+    if (isSubmissionLocked() || submissionBusy()) return;
     removingTracks.add(trackId);
     if (activeSubmissionId === trackId) stopSubmissionPlayback();
     render();
     try {
-      // Een zojuist toegevoegd nummer moet eerst in het centrale concept staan;
-      // de server verwijdert alleen audio uit het concept van de eigenaar.
-      await draftSaveQueue;
-      const response = await fetch(`/api/audio/${encodeURIComponent(trackId)}?memberId=${encodeURIComponent(memberId)}`, { method: "DELETE" });
-      if (!response.ok && response.status !== 404) {
-        const payload = await response.json().catch(() => ({})) as { error?: string };
-        throw new Error(payload.error ?? "Het audiobestand kon niet worden verwijderd.");
-      }
+      const nextTracks = state.submissionIds
+        .filter((id) => id !== trackId)
+        .map(getTrack)
+        .filter((track): track is Track => Boolean(track));
+      await persistDraft(nextTracks);
       audioRecords.delete(trackId);
       playbackPositions.delete(trackId);
       state.submissionIds = state.submissionIds.filter((id) => id !== trackId);
       delete state.customTracks[trackId];
-      removingTracks.delete(trackId);
-      saveState();
       setMessage("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Het nummer kon niet worden verwijderd.", true);
@@ -777,6 +815,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   function render() {
     const submissionTracks = state.submissionIds.map(getTrack).filter((track): track is Track => Boolean(track));
     const selectionLocked = isSubmissionLocked();
+    const controlsBusy = submissionBusy();
     list.innerHTML = submissionTracks
       .map((track, index) => {
         const removing = removingTracks.has(track.id);
@@ -798,7 +837,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
             </button>
             <span class="row-track"><strong>${escapeHtml(track.title)}</strong><span>${escapeHtml(track.artist)}</span></span>
             <span class="row-duration">${displayedDuration(track)}</span>
-            ${finalSubmission ? "" : `<button class="text-action remove-track" type="button" data-remove ${selectionLocked || removing ? "disabled" : ""}>${removing ? "Verwijderen…" : "Verwijder"}</button>`}
+            ${finalSubmission ? "" : `<button class="text-action remove-track" type="button" data-remove ${selectionLocked || controlsBusy ? "disabled" : ""}>${removing ? "Verwijderen…" : "Verwijder"}</button>`}
             ${audioControls(track)}
           </li>`;
       })
@@ -812,7 +851,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     const missingAudio = submissionTracks.length - audioCount;
     audioProgress.textContent = `${audioCount} van 20 met audio`;
     spotsLeft.textContent = !submissionStatusLoaded
-      ? "Inzending controleren…"
+      ? submissionStatusFailed ? "Inzending laden mislukt." : "Inzending controleren…"
       : finalSubmission
         ? `Definitief sinds ${formattedFinalizedAt(finalSubmission.finalizedAt!)}.`
         : remaining === 0
@@ -820,11 +859,12 @@ import ProgressMarks from "../components/ProgressMarks.astro";
             ? `Nog ${missingAudio} ${missingAudio === 1 ? "audiobestand" : "audiobestanden"} toevoegen.`
             : "Alles compleet. Controleer je lijst en maak hem definitief."
           : `Nog ${remaining} ${remaining === 1 ? "plek" : "plekken"} vrij.`;
-    input.disabled = selectionLocked || remaining === 0 || addingTrack;
-    searchSubmit.disabled = selectionLocked || remaining === 0 || addingTrack;
-    manualOpen.disabled = selectionLocked || remaining === 0 || addingTrack;
-    saveButton.disabled = selectionLocked || remaining !== 0 || missingAudio !== 0 || !audioIndexLoaded || audioIndexFailed || addingTrack;
-    saveButton.textContent = finalSubmission ? "Inzending is definitief" : "Inzending definitief maken";
+    input.disabled = selectionLocked || remaining === 0 || controlsBusy;
+    searchSubmit.disabled = selectionLocked || remaining === 0 || controlsBusy;
+    manualOpen.disabled = selectionLocked || remaining === 0 || controlsBusy;
+    saveButton.disabled = selectionLocked || remaining !== 0 || missingAudio !== 0 || !audioIndexLoaded || audioIndexFailed || controlsBusy;
+    saveButton.textContent = finalSubmission ? "Inzending is definitief" : finalizingSubmission ? "Definitief maken…" : "Inzending definitief maken";
+    retrySubmissionLoad.hidden = !submissionStatusFailed;
     if (selectionLocked || remaining === 0) {
       setSearchOpen(false);
       if (manualDialog.open && !addingTrack) manualDialog.close();
@@ -833,7 +873,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    if (isSubmissionLocked() || state.submissionIds.length >= 20) return;
+    if (isSubmissionLocked() || submissionBusy() || state.submissionIds.length >= 20) return;
     window.clearTimeout(searchTimer);
     search(input.value);
   });
@@ -868,7 +908,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
 
   manualForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (addingTrack || isSubmissionLocked() || state.submissionIds.length >= 20) return;
+    if (submissionBusy() || isSubmissionLocked() || state.submissionIds.length >= 20) return;
     const title = manualTitle.value.trim();
     const artist = manualArtist.value.trim();
     const album = manualAlbum.value.trim();
@@ -928,7 +968,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     }
 
     const addButton = target.closest<HTMLButtonElement>("[data-add-track]");
-    if (!addButton || addButton.disabled || addingTrack || isSubmissionLocked() || state.submissionIds.length >= 20) return;
+    if (!addButton || addButton.disabled || submissionBusy() || isSubmissionLocked() || state.submissionIds.length >= 20) return;
     const track = currentSearchTracks.get(addButton.dataset.addTrack!);
     if (!track || isTrackSelected(track)) return;
     addButton.disabled = true;
@@ -958,33 +998,9 @@ import ProgressMarks from "../components/ProgressMarks.astro";
 
   window.addEventListener("resize", sizeSearchPanel);
 
-  previewAudio.addEventListener("ended", () => stopPreview());
-  previewAudio.addEventListener("error", () => {
-    if (!activePreviewId) return;
-    stopPreview();
-    setMessage("De preview van dit nummer kan niet worden afgespeeld.", true);
-  });
-
   submissionAudio.addEventListener("timeupdate", () => {
     if (!activeSubmissionId || !audioRecords.has(activeSubmissionId)) return;
     updateSubmissionTimeline(activeSubmissionId, submissionAudio.currentTime, submissionAudio.duration);
-  });
-
-  submissionAudio.addEventListener("ended", () => {
-    const trackId = activeSubmissionId;
-    if (!trackId) return;
-    playbackPositions.set(trackId, 0);
-    updateSubmissionTimeline(trackId, 0, submissionAudio.duration);
-    setSubmissionPlaying(trackId, false);
-    activeSubmissionId = undefined;
-  });
-
-  submissionAudio.addEventListener("error", () => {
-    const trackId = activeSubmissionId;
-    if (!trackId) return;
-    activeSubmissionId = undefined;
-    setSubmissionPlaying(trackId, false);
-    setMessage("Dit audiobestand kan niet worden afgespeeld.", true);
   });
 
   list.addEventListener("click", (event) => {
@@ -1063,6 +1079,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   });
 
   saveButton.addEventListener("click", finalizeCurrentSubmission);
+  retrySubmissionLoad.addEventListener("click", loadFinalSubmission);
 
   render();
   loadFinalSubmission();

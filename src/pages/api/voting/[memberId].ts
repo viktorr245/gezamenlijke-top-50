@@ -2,14 +2,10 @@ import type { APIRoute } from "astro";
 import { isMemberId } from "../../../data/tracks";
 import { AuthorizationError, requireMember } from "../../../server/auth";
 import { loadGroupData } from "../../../server/group-state";
+import { isSameOrigin } from "../../../server/request-security";
 import { buildComparisonSchedules, castVote, finalizeVoting, undoLastVote } from "../../../server/vote-storage";
 
 export const prerender = false;
-
-function sameOrigin(request: Request): boolean {
-  const origin = request.headers.get("Origin");
-  return !origin || origin === new URL(request.url).origin;
-}
 
 async function votingPayload(memberIdValue: string) {
   if (!isMemberId(memberIdValue)) throw new Error("Onbekende deelnemer.");
@@ -39,12 +35,12 @@ export const GET: APIRoute = async ({ params, request }) => {
     const memberId = requireMember(request, params.memberId);
     return Response.json(await votingPayload(memberId), { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Stemmen laden mislukt." }, { status: error instanceof AuthorizationError ? error.status : 400 });
+    return Response.json({ error: error instanceof Error ? error.message : "Stemmen laden mislukt." }, { status: error instanceof AuthorizationError ? error.status : 500 });
   }
 };
 
 export const POST: APIRoute = async ({ params, request }) => {
-  if (!sameOrigin(request)) return Response.json({ error: "Ongeldige stemaanvraag." }, { status: 403 });
+  if (!isSameOrigin(request)) return Response.json({ error: "Ongeldige stemaanvraag." }, { status: 403 });
   try {
     const memberId = requireMember(request, params.memberId);
     const group = await loadGroupData();
@@ -60,7 +56,7 @@ export const POST: APIRoute = async ({ params, request }) => {
 };
 
 export const PUT: APIRoute = async ({ params, request }) => {
-  if (!sameOrigin(request)) return Response.json({ error: "Ongeldige stemaanvraag." }, { status: 403 });
+  if (!isSameOrigin(request)) return Response.json({ error: "Ongeldige stemaanvraag." }, { status: 403 });
   try {
     const memberId = requireMember(request, params.memberId);
     const group = await loadGroupData();
@@ -76,7 +72,7 @@ export const PUT: APIRoute = async ({ params, request }) => {
 };
 
 export const DELETE: APIRoute = async ({ params, request }) => {
-  if (!sameOrigin(request)) return Response.json({ error: "Ongeldige stemaanvraag." }, { status: 403 });
+  if (!isSameOrigin(request)) return Response.json({ error: "Ongeldige stemaanvraag." }, { status: 403 });
   try {
     const memberId = requireMember(request, params.memberId);
     const group = await loadGroupData();

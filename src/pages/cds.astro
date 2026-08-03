@@ -65,6 +65,7 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
       <div class="disc-footer">
         <button class="outlined-action" type="button" id="finalize-discs" hidden>Indeling definitief maken</button>
         <p id="disc-message" role="status" aria-live="polite"></p>
+        <button class="text-action" type="button" id="retry-layout-save" hidden>Opnieuw opslaan</button>
       </div>
     </div>
 
@@ -112,6 +113,7 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
   const eyebrow = document.querySelector<HTMLElement>("#disc-eyebrow")!;
   const autoButton = document.querySelector<HTMLButtonElement>("#auto-distribute")!;
   const finalizeButton = document.querySelector<HTMLButtonElement>("#finalize-discs")!;
+  const retryLayoutSave = document.querySelector<HTMLButtonElement>("#retry-layout-save")!;
   const burnPackages = document.querySelector<HTMLElement>("#burn-packages")!;
   const burnProgress = document.querySelector<HTMLElement>("#burn-package-progress")!;
   const burnProgressBar = document.querySelector<HTMLElement>("#burn-package-progress-bar")!;
@@ -276,6 +278,7 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
         : "Viktor beheert de conceptindeling; vernieuw de pagina om zijn laatste wijzigingen te zien.";
     message.textContent = saveError || (over ? "Minstens één cd is langer dan 80 minuten." : "");
     message.classList.toggle("error", Boolean(saveError) || over);
+    retryLayoutSave.hidden = !saveError || !editable();
   }
 
   async function persist(snapshot: string[][]) {
@@ -291,6 +294,8 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
 
   function queueSave() {
     const snapshot = discs.map((disc) => [...disc]);
+    saveError = "";
+    render();
     saveQueue = saveQueue.then(() => persist(snapshot)).then(() => { saveError = ""; }).catch((error) => {
       saveError = error instanceof Error ? error.message : "De indeling kon niet worden opgeslagen.";
     }).finally(render);
@@ -384,6 +389,7 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
     }
     render();
   });
+  retryLayoutSave.addEventListener("click", queueSave);
   retryBurnPackages.addEventListener("click", () => void loadBurnPackages(true));
   void loadStorageStatus();
 

@@ -1,12 +1,8 @@
 import type { APIRoute } from "astro";
 import { listPinnedITunesTracks, pinITunesTrack } from "../../../server/itunes-cache";
+import { isSameOrigin } from "../../../server/request-security";
 
 export const prerender = false;
-
-function sameOrigin(request: Request): boolean {
-  const origin = request.headers.get("Origin");
-  return !origin || origin === new URL(request.url).origin;
-}
 
 export const GET: APIRoute = async () => {
   try {
@@ -20,7 +16,7 @@ export const GET: APIRoute = async () => {
 };
 
 export const POST: APIRoute = async ({ request }) => {
-  if (!sameOrigin(request)) return Response.json({ error: "Ongeldige opslagaanvraag." }, { status: 403 });
+  if (!isSameOrigin(request)) return Response.json({ error: "Ongeldige opslagaanvraag." }, { status: 403 });
   try {
     const body = await request.json() as { sourceId?: unknown };
     const track = await pinITunesTrack(typeof body.sourceId === "string" ? body.sourceId : "");

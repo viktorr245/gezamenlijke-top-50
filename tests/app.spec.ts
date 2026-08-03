@@ -11,6 +11,7 @@ import { calculateRanking } from "../src/server/ranking";
 import { finalizeSubmission, getSubmission, listSubmissions, saveDraftSubmission, type SubmissionIndex } from "../src/server/submission-storage";
 import { buildComparisonSchedules, campaignIdFor, castVote, finalizeVoting, listVotes, loadVotingState, undoLastVote, type VoteChoice } from "../src/server/vote-storage";
 import { ZipWriter } from "../src/server/zip-writer";
+import { POST as login } from "../src/pages/api/auth/login";
 
 function makeTrack(owner: MemberId, index: number): Track {
   return {
@@ -136,25 +137,86 @@ test("pincode-login maakt een ondertekende sessie en schermt andere deelnemers a
   test.skip(testInfo.project.name !== "desktop-chromium");
   const previousPins = process.env.MEMBER_PINS;
   const previousSecret = process.env.AUTH_SECRET;
+  const previousTrustProxy = process.env.TRUST_PROXY;
+  const previousPublicOrigin = process.env.PUBLIC_ORIGIN;
   process.env.MEMBER_PINS = JSON.stringify({ viktor: "1111", daniel: "2222", keano: "3333", sander: "4444", jurjan: "5555" });
   process.env.AUTH_SECRET = "een-testgeheim-dat-langer-is-dan-tweeendertig-tekens";
+  delete process.env.TRUST_PROXY;
   try {
     expect(verifyPin("daniel", "2222")).toBe("daniel");
     expect(() => verifyPin("daniel", "9999")).toThrow(/Controleer/);
     const loginRequest = new Request("https://voorbeeld.test/api/auth/login");
     const cookie = sessionCookie("daniel", loginRequest).split(";")[0];
     expect(cookie).toContain("gezamenlijke_top_50_session=");
+    const forwardedHttpRequest = new Request("http://voorbeeld.test/", { headers: { "X-Forwarded-Proto": "https" } });
+    expect(sessionCookie("daniel", forwardedHttpRequest)).not.toContain("; Secure");
     const signedRequest = new Request("https://voorbeeld.test/api/submissions/daniel", { headers: { Cookie: cookie } });
     expect(authenticatedMember(signedRequest)).toBe("daniel");
     expect(requireMember(signedRequest, "daniel")).toBe("daniel");
     expect(() => requireMember(signedRequest, "viktor")).toThrow(/alleen je eigen/);
     const tampered = new Request("https://voorbeeld.test/", { headers: { Cookie: `${cookie}x` } });
     expect(authenticatedMember(tampered)).toBeUndefined();
+
+    for (let attempt = 0; attempt < 9; attempt += 1) {
+      const request = new Request("https://voorbeeld.test/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "https://voorbeeld.test",
+          "X-Forwarded-For": `203.0.113.${attempt + 1}`,
+        },
+        body: JSON.stringify({ memberId: "daniel", pin: "fout" }),
+      });
+      const response = await login({ request, clientAddress: "198.51.100.20" } as Parameters<typeof login>[0]);
+      expect(response.status).toBe(attempt < 8 ? 401 : 429);
+    }
+
+    process.env.TRUST_PROXY = "true";
+    expect(sessionCookie("daniel", forwardedHttpRequest)).toContain("; Secure");
+    const proxiedRequest = new Request("https://voorbeeld.test/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "https://voorbeeld.test", "X-Forwarded-For": "203.0.113.200" },
+      body: JSON.stringify({ memberId: "daniel", pin: "fout" }),
+    });
+    expect((await login({ request: proxiedRequest, clientAddress: "198.51.100.20" } as Parameters<typeof login>[0])).status).toBe(401);
+
+    process.env.PUBLIC_ORIGIN = "https://degezamenlijke50.boe.moe";
+    const publicProxyRequest = new Request("http://192.168.2.61:4321/api/auth/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "https://degezamenlijke50.boe.moe",
+        "X-Forwarded-For": "203.0.113.201",
+        "X-Forwarded-Proto": "https",
+      },
+      body: JSON.stringify({ memberId: "viktor", pin: "1111" }),
+    });
+    const publicProxyResponse = await login({ request: publicProxyRequest, clientAddress: "192.168.2.64" } as Parameters<typeof login>[0]);
+    expect(publicProxyResponse.status).toBe(200);
+    expect(publicProxyResponse.headers.get("Set-Cookie")).toContain("; Secure");
+
+    const foreignOriginRequest = new Request("http://192.168.2.61:4321/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "https://kwaad.example" },
+      body: JSON.stringify({ memberId: "viktor", pin: "1111" }),
+    });
+    expect((await login({ request: foreignOriginRequest, clientAddress: "192.168.2.64" } as Parameters<typeof login>[0])).status).toBe(403);
+
+    const oversizedLoginRequest = new Request("http://192.168.2.61:4321/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "https://degezamenlijke50.boe.moe" },
+      body: JSON.stringify({ memberId: "viktor", pin: "1".repeat(5_000) }),
+    });
+    expect((await login({ request: oversizedLoginRequest, clientAddress: "192.168.2.64" } as Parameters<typeof login>[0])).status).toBe(413);
   } finally {
     if (previousPins === undefined) delete process.env.MEMBER_PINS;
     else process.env.MEMBER_PINS = previousPins;
     if (previousSecret === undefined) delete process.env.AUTH_SECRET;
     else process.env.AUTH_SECRET = previousSecret;
+    if (previousTrustProxy === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = previousTrustProxy;
+    if (previousPublicOrigin === undefined) delete process.env.PUBLIC_ORIGIN;
+    else process.env.PUBLIC_ORIGIN = previousPublicOrigin;
   }
 });
 
@@ -344,6 +406,12 @@ test("handmatige nummers worden veilig bewaard en doen mee aan dubbele-detectie"
       id: "manual-viktor-verkeerde-eigenaar",
       owner: "daniel",
     }], storagePath)).rejects.toThrow(/ongeldige gegevens/);
+    await expect(saveDraftSubmission("viktor", [{
+      ...makeTrack("viktor", 0),
+      id: "itunes-12345",
+      source: "itunes",
+      sourceId: 12345,
+    }], storagePath)).rejects.toThrow(/ongeldige gegevens/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -478,6 +546,18 @@ test("audio bewaart het origineel en maakt een Opus-afspeelbestand", async ({}, 
     expect(replacement?.path).not.toBe(original?.path);
     await expect(readFile(original!.path)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await readFile(replacement!.path)).toEqual(wav);
+    const orphan = path.join(path.dirname(replacement!.path), `achtergebleven-${"a".repeat(32)}.webm`);
+    await writeFile(orphan, "oud");
+    await storage.saveAudio("audio-tweede", new File([Uint8Array.from(wav)], "tweede.wav", { type: "audio/wav" }), {
+      title: "Tweede testnummer",
+      artist: "Testartiest",
+    });
+    await expect(readFile(orphan)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await storage.removeAudioBatch(["audio-test", "audio-tweede"])).toBe(2);
+    expect(await storage.removeAudioBatch([])).toBe(0);
+    expect(await storage.getAudioAsset("audio-test", true)).toBeUndefined();
+    expect(await storage.getAudioAsset("audio-tweede", true)).toBeUndefined();
+    await expect(readFile(replacement!.path)).rejects.toMatchObject({ code: "ENOENT" });
   } finally {
     if (previousStorage === undefined) delete process.env.STORAGE_DIR;
     else process.env.STORAGE_DIR = previousStorage;
@@ -525,6 +605,57 @@ test("stemmen gebruikt 120 markeringen, centrale audio en ondersteunt één stap
   await expect(page.locator("#undo-vote")).toBeVisible();
   await page.locator("#undo-vote").click();
   await expect(page.locator("#vote-count")).toHaveText("7");
+});
+
+test("een mislukte stem wordt ook visueel teruggedraaid", async ({ page }) => {
+  await page.route("**/api/voting/viktor", async (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({ status: 500, json: { error: "Opslaan mislukt." } });
+    }
+    await route.fulfill({ json: votingPayload(7) });
+  });
+
+  await page.goto("/stemmen");
+  const left = page.locator('[data-choice="left"]');
+  const right = page.locator('[data-choice="right"]');
+  await left.locator("[data-vote]").click();
+  await expect(page.locator("#vote-message")).toHaveText("Opslaan mislukt.");
+  await expect(left).not.toHaveClass(/is-selected/);
+  await expect(right).not.toHaveClass(/is-rejected/);
+  await expect(left.locator("[data-vote]")).toBeEnabled();
+});
+
+test("snel wisselen tussen nummers laat alleen de laatste stemkaart afspelen", async ({ page }) => {
+  await page.addInitScript(() => {
+    class DelayedAudio extends EventTarget {
+      src = "";
+      paused = true;
+      currentTime = 0;
+      duration = 180;
+      volume = 1;
+      load() {}
+      pause() { this.paused = true; }
+      removeAttribute(name: string) { if (name === "src") this.src = ""; }
+      play() {
+        const delay = this.src.includes("daniel") ? 80 : 0;
+        return new Promise<void>((resolve) => window.setTimeout(() => {
+          this.paused = false;
+          resolve();
+        }, delay));
+      }
+    }
+    Object.defineProperty(window, "Audio", { configurable: true, value: DelayedAudio });
+  });
+  await page.route("**/api/voting/viktor", (route) => route.fulfill({ json: votingPayload(7) }));
+
+  await page.goto("/stemmen");
+  const left = page.locator('[data-choice="left"]');
+  const right = page.locator('[data-choice="right"]');
+  await left.locator("[data-play]").click();
+  await right.locator("[data-play]").click();
+  await page.waitForTimeout(120);
+  await expect(left).not.toHaveClass(/is-playing/);
+  await expect(right).toHaveClass(/is-playing/);
 });
 
 test("na keuze 120 volgt eerst een expliciete definitieve bevestiging", async ({ page }) => {
@@ -593,6 +724,73 @@ test("Mijn 20 zoekt, bewaart centraal en maakt audio duidelijk verplicht", async
       expect(box?.height).toBeGreaterThanOrEqual(44);
     }
   }
+});
+
+test("Mijn 20 kan na een tijdelijke laadfout opnieuw proberen", async ({ page }) => {
+  let attempts = 0;
+  await page.route("**/api/submissions/viktor", async (route) => {
+    attempts += 1;
+    if (attempts === 1) return route.fulfill({ status: 500, json: { error: "Laden mislukt." } });
+    return route.fulfill({ json: { submission: null } });
+  });
+  await page.route("**/api/audio", (route) => route.fulfill({ json: { audio: {} } }));
+
+  await page.goto("/mijn-20");
+  await expect(page.locator("#retry-submission-load")).toBeVisible();
+  await expect(page.locator("#track-search")).toBeDisabled();
+  await page.locator("#retry-submission-load").click();
+  await expect(page.locator("#retry-submission-load")).toBeHidden();
+  await expect(page.locator("#track-search")).toBeEnabled();
+  expect(attempts).toBe(2);
+});
+
+test("snel wisselen in Mijn 20 houdt alleen het laatste nummer actief", async ({ page }) => {
+  await page.addInitScript(() => {
+    class DelayedAudio extends EventTarget {
+      src = "";
+      paused = true;
+      currentTime = 0;
+      duration = 180;
+      volume = 1;
+      load() {}
+      pause() { this.paused = true; }
+      removeAttribute(name: string) { if (name === "src") this.src = ""; }
+      play() {
+        const delay = this.src.includes("viktor-00") ? 80 : 0;
+        return new Promise<void>((resolve) => window.setTimeout(() => {
+          this.paused = false;
+          resolve();
+        }, delay));
+      }
+    }
+    Object.defineProperty(window, "Audio", { configurable: true, value: DelayedAudio });
+  });
+  const tracks = [makeTrack("viktor", 0), makeTrack("viktor", 1)];
+  await page.route("**/api/submissions/viktor", (route) => route.fulfill({ json: { submission: {
+    memberId: "viktor",
+    tracks,
+    updatedAt: "2026-08-03T12:00:00.000Z",
+    finalizedAt: null,
+  } } }));
+  await page.route("**/api/audio", (route) => route.fulfill({ json: { audio: Object.fromEntries(tracks.map((track) => [track.id, {
+    trackId: track.id,
+    title: track.title,
+    artist: track.artist,
+    originalName: `${track.id}.wav`,
+    mimeType: "audio/webm",
+    size: 1234,
+    duration: 180,
+    uploadedAt: "2026-08-03T12:00:00.000Z",
+    url: `/api/audio/${track.id}`,
+  }])) } }));
+
+  await page.goto("/mijn-20");
+  const rows = page.locator(".submission-row");
+  await rows.nth(0).locator("[data-cover-play]").click();
+  await rows.nth(1).locator("[data-cover-play]").click();
+  await page.waitForTimeout(120);
+  await expect(rows.nth(0)).not.toHaveClass(/is-audio-playing/);
+  await expect(rows.nth(1)).toHaveClass(/is-audio-playing/);
 });
 
 test("Mijn 20 laat een niet-gevonden nummer handmatig en zonder iTunes-verzoek toevoegen", async ({ page, isMobile }) => {
@@ -671,10 +869,10 @@ test("Mijn 20 laat een niet-gevonden nummer handmatig en zonder iTunes-verzoek t
   await expect(page.locator(".row-cover-button")).toBeEnabled();
 });
 
-test("een nummer uit een concept verwijderen ruimt beide server-audiobestanden op", async ({ page }) => {
+test("een nummer verwijderen wordt met één consistente conceptupdate opgeslagen", async ({ page }) => {
   const track = { ...makeTrack("viktor", 0), id: "itunes-100000", source: "itunes" as const, sourceId: "100000" };
   let draft = [track];
-  let audioDeleted = false;
+  let audioDeleteRequested = false;
   await page.route("**/api/submissions/viktor", async (route) => {
     if (route.request().method() === "GET") {
       return route.fulfill({ json: { submission: { memberId: "viktor", tracks: draft, updatedAt: new Date().toISOString(), finalizedAt: null } } });
@@ -695,15 +893,117 @@ test("een nummer uit een concept verwijderen ruimt beide server-audiobestanden o
     },
   } } }));
   await page.route(`**/api/audio/${track.id}?**`, async (route) => {
-    audioDeleted = route.request().method() === "DELETE";
+    audioDeleteRequested = route.request().method() === "DELETE";
     await route.fulfill({ status: 204, body: "" });
   });
   await page.goto("/mijn-20");
   await expect(page.locator(".audio-ready-label")).toContainText("Audio toegevoegd");
   await page.locator(".remove-track").click();
   await expect(page.locator(".submission-row")).toHaveCount(0);
-  await expect.poll(() => audioDeleted).toBe(true);
   await expect.poll(() => draft.length).toBe(0);
+  expect(audioDeleteRequested).toBe(false);
+});
+
+test("een mislukte conceptupdate laat nummer en audio in Mijn 20 staan", async ({ page }) => {
+  const track = { ...makeTrack("viktor", 0), id: "itunes-100000", source: "itunes" as const, sourceId: "100000" };
+  await page.route("**/api/submissions/viktor", async (route) => {
+    if (route.request().method() === "GET") {
+      return route.fulfill({ json: { submission: { memberId: "viktor", tracks: [track], updatedAt: new Date().toISOString(), finalizedAt: null } } });
+    }
+    return route.fulfill({ status: 500, json: { error: "Concept opslaan mislukt." } });
+  });
+  await page.route("**/api/audio", (route) => route.fulfill({ json: { audio: {
+    [track.id]: {
+      trackId: track.id,
+      title: track.title,
+      artist: track.artist,
+      originalName: "origineel.flac",
+      mimeType: "audio/webm",
+      size: 1234,
+      uploadedAt: new Date().toISOString(),
+      url: `/api/audio/${track.id}`,
+    },
+  } } }));
+
+  await page.goto("/mijn-20");
+  await page.locator(".remove-track").click();
+  await expect(page.locator("#submission-message")).toHaveText("Concept opslaan mislukt.");
+  await expect(page.locator(".submission-row")).toHaveCount(1);
+  await expect(page.locator(".audio-ready-label")).toContainText("Audio toegevoegd");
+});
+
+test("Mijn 20 verwerkt lijstwijzigingen strikt na elkaar", async ({ page }) => {
+  const tracks = [makeTrack("viktor", 0), makeTrack("viktor", 1)];
+  let storedTracks = [...tracks];
+  let putCount = 0;
+  let releaseFirstSave!: () => void;
+  const firstSaveGate = new Promise<void>((resolve) => { releaseFirstSave = resolve; });
+  await page.route("**/api/submissions/viktor", async (route) => {
+    if (route.request().method() === "GET") {
+      return route.fulfill({ json: { submission: { memberId: "viktor", tracks: storedTracks, updatedAt: new Date().toISOString(), finalizedAt: null } } });
+    }
+    putCount += 1;
+    if (putCount === 1) await firstSaveGate;
+    storedTracks = (route.request().postDataJSON() as { tracks: Track[] }).tracks;
+    return route.fulfill({ json: { submission: { memberId: "viktor", tracks: storedTracks, updatedAt: new Date().toISOString(), finalizedAt: null } } });
+  });
+  await page.route("**/api/audio", (route) => route.fulfill({ json: { audio: {} } }));
+
+  await page.goto("/mijn-20");
+  await page.locator(".remove-track").first().click();
+  await expect.poll(() => putCount).toBe(1);
+  await expect(page.locator(".remove-track").nth(1)).toBeDisabled();
+  releaseFirstSave();
+  await expect(page.locator(".submission-row")).toHaveCount(1);
+  await page.locator(".remove-track").click();
+  await expect(page.locator(".submission-row")).toHaveCount(0);
+  await expect.poll(() => storedTracks.length).toBe(0);
+  expect(putCount).toBe(2);
+});
+
+test("Mijn 20 blokkeert andere wijzigingen tijdens definitief maken", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  const tracks = Array.from({ length: 20 }, (_, index) => makeTrack("viktor", index));
+  let finalizeStarted = false;
+  let releaseFinalize!: () => void;
+  const finalizeGate = new Promise<void>((resolve) => { releaseFinalize = resolve; });
+  await page.route("**/api/submissions/viktor", async (route) => {
+    if (route.request().method() === "GET") {
+      return route.fulfill({ json: { submission: { memberId: "viktor", tracks, updatedAt: new Date().toISOString(), finalizedAt: null } } });
+    }
+    if (route.request().method() === "POST") {
+      finalizeStarted = true;
+      await finalizeGate;
+      return route.fulfill({ status: 201, json: { submission: {
+        memberId: "viktor",
+        tracks,
+        updatedAt: "2026-08-03T12:00:00.000Z",
+        finalizedAt: "2026-08-03T12:00:00.000Z",
+      } } });
+    }
+    return route.fulfill({ json: { submission: { memberId: "viktor", tracks, updatedAt: new Date().toISOString(), finalizedAt: null } } });
+  });
+  await page.route("**/api/audio", (route) => route.fulfill({ json: { audio: Object.fromEntries(tracks.map((track) => [track.id, {
+    trackId: track.id,
+    title: track.title,
+    artist: track.artist,
+    originalName: `${track.id}.wav`,
+    mimeType: "audio/webm",
+    size: 1234,
+    duration: track.duration,
+    uploadedAt: "2026-08-03T12:00:00.000Z",
+    url: `/api/audio/${track.id}`,
+  }])) } }));
+
+  await page.goto("/mijn-20");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("#save-submission").click();
+  await expect.poll(() => finalizeStarted).toBe(true);
+  await expect(page.locator(".remove-track").first()).toBeDisabled();
+  await expect(page.locator(".audio-replace-action").first()).toBeDisabled();
+  await expect(page.locator("#save-submission")).toHaveText("Definitief maken…");
+  releaseFinalize();
+  await expect(page.locator("#save-submission")).toBeHidden();
 });
 
 test("audio van een definitieve inzending kan in de interface niet worden vervangen", async ({ page }) => {
@@ -843,11 +1143,14 @@ test("een mislukte cd-save kan geen oudere indeling definitief maken", async ({ 
   };
   const status = groupStatus({ votingComplete: true, completedVoterCount: 5, finalizedCount: 5, phase: "ranglijst" });
   let finalizeRequests = 0;
+  let saveAttempts = 0;
   await page.route("**/api/disc-layout", async (route) => {
     if (route.request().method() === "GET") return route.fulfill({ json: { status, layout, tracks: topTracks, organizerId: "viktor" } });
     if (route.request().method() === "PUT") {
+      saveAttempts += 1;
       await new Promise((resolve) => setTimeout(resolve, 150));
-      return route.fulfill({ status: 500, json: { error: "Opslaan mislukt." } });
+      if (saveAttempts === 1) return route.fulfill({ status: 500, json: { error: "Opslaan mislukt." } });
+      return route.fulfill({ json: { layout: { ...layout, discs: (route.request().postDataJSON() as { discs: string[][] }).discs } } });
     }
     finalizeRequests += 1;
     return route.fulfill({ json: { layout: { ...layout, finalizedAt: new Date().toISOString() } } });
@@ -861,6 +1164,28 @@ test("een mislukte cd-save kan geen oudere indeling definitief maken", async ({ 
   await expect(page.locator("#disc-message")).toContainText("Opslaan mislukt.");
   expect(finalizeRequests).toBe(0);
   await expect(page.locator("#disc-eyebrow")).toHaveText("Conceptindeling");
+  await page.locator("#retry-layout-save").click();
+  await expect(page.locator("#retry-layout-save")).toBeHidden();
+  await expect(page.locator("#disc-message")).toBeEmpty();
+  await expect(page.locator("#finalize-discs")).toBeEnabled();
+  expect(saveAttempts).toBe(2);
+});
+
+test("lange paginatitels blijven op een scherm van 320 pixels volledig zichtbaar", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.route("**/api/ranking", (route) => route.fulfill({ json: { status: groupStatus(), ranking: null } }));
+  await page.route("**/api/disc-layout", (route) => route.fulfill({ json: { status: groupStatus(), layout: null, tracks: [], organizerId: "viktor" } }));
+
+  for (const [pathName, selector] of [["/ranglijst", "#ranking-title"], ["/cds", "#discs-title"]] as const) {
+    await page.goto(pathName);
+    const bounds = await page.locator(selector).evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      return { left: box.left, right: box.right, viewport: document.documentElement.clientWidth };
+    });
+    expect(bounds.left).toBeGreaterThanOrEqual(0);
+    expect(bounds.right).toBeLessThanOrEqual(bounds.viewport);
+  }
 });
 
 test("alle pagina’s houden document-scroll en horizontale overflow tegen", async ({ page }) => {

@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
 import { AuthorizationError, isAuthenticationEnabled, sessionCookie, verifyPin } from "../../../server/auth";
+import { isSameOrigin } from "../../../server/request-security";
 
 export const prerender = false;
 
@@ -8,16 +9,58 @@ const attempts = new Map<string, Attempt>();
 const WINDOW_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS = 8;
 const MAX_TRACKED_ATTEMPTS = 1_000;
+const MAX_LOGIN_BODY_BYTES = 4 * 1024;
 
-function sameOrigin(request: Request): boolean {
-  const origin = request.headers.get("Origin");
-  return !origin || origin === new URL(request.url).origin;
+class LoginBodyError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+  }
 }
 
-function attemptKey(request: Request, memberId: unknown): string {
-  const address = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || request.headers.get("x-real-ip") || "local";
+async function readLoginBody(request: Request): Promise<{ memberId?: unknown; pin?: unknown }> {
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_LOGIN_BODY_BYTES) {
+    throw new LoginBodyError("De aanmeldingsaanvraag is te groot.", 413);
+  }
+  if (!request.body) throw new LoginBodyError("De aanmeldingsaanvraag bevat geen geldige JSON.", 400);
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_LOGIN_BODY_BYTES) {
+      await reader.cancel();
+      throw new LoginBodyError("De aanmeldingsaanvraag is te groot.", 413);
+    }
+    chunks.push(value);
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as { memberId?: unknown; pin?: unknown };
+  } catch {
+    throw new LoginBodyError("De aanmeldingsaanvraag bevat geen geldige JSON.", 400);
+  }
+}
+
+function attemptKey(address: string | undefined, memberId: unknown): string {
   const normalizedMember = typeof memberId === "string" && memberId.length <= 20 ? memberId : "onbekend";
-  return `${address.slice(0, 100)}:${normalizedMember}`;
+  return `${(address || "local").slice(0, 100)}:${normalizedMember}`;
+}
+
+function clientAddressFor(request: Request, clientAddress: string | undefined): string | undefined {
+  if (process.env.TRUST_PROXY !== "true") return clientAddress;
+  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+    || request.headers.get("x-real-ip")?.trim()
+    || clientAddress;
 }
 
 function pruneAttempts(now: number) {
@@ -31,12 +74,12 @@ function pruneAttempts(now: number) {
   }
 }
 
-export const POST: APIRoute = async ({ request }) => {
-  if (!sameOrigin(request)) return Response.json({ error: "Ongeldige aanmeldpoging." }, { status: 403 });
+export const POST: APIRoute = async ({ request, clientAddress }) => {
+  if (!isSameOrigin(request)) return Response.json({ error: "Ongeldige aanmeldpoging." }, { status: 403 });
   if (!isAuthenticationEnabled()) return Response.json({ error: "Pincode-login is niet ingesteld." }, { status: 404 });
   try {
-    const body = await request.json() as { memberId?: unknown; pin?: unknown };
-    const key = attemptKey(request, body.memberId);
+    const body = await readLoginBody(request);
+    const key = attemptKey(clientAddressFor(request, clientAddress), body.memberId);
     const now = Date.now();
     pruneAttempts(now);
     const attempt = attempts.get(key);
@@ -58,7 +101,7 @@ export const POST: APIRoute = async ({ request }) => {
       throw error;
     }
   } catch (error) {
-    const status = error instanceof AuthorizationError ? error.status : 400;
+    const status = error instanceof AuthorizationError || error instanceof LoginBodyError ? error.status : 400;
     return Response.json(
       { error: error instanceof Error ? error.message : "Aanmelden is mislukt." },
       { status, headers: { "Cache-Control": "no-store" } },

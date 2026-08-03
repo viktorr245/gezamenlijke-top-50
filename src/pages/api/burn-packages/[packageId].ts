@@ -16,6 +16,12 @@ function requestedRange(header: string | null, size: number): { start: number; e
   return { start, end };
 }
 
+function errorStatus(error: unknown): number {
+  const message = error instanceof Error ? error.message : "";
+  if (message.includes("nog niet definitief") || message.includes("nog niet vast") || message.includes("hoort niet meer")) return 409;
+  return 500;
+}
+
 export const GET: APIRoute = async ({ params, request }) => {
   try {
     const { layout, tracks } = await loadFinalBurnContext();
@@ -51,7 +57,7 @@ export const GET: APIRoute = async ({ params, request }) => {
   } catch (error) {
     return Response.json(
       { error: error instanceof Error ? error.message : "Het brandpakket kon niet worden gedownload." },
-      { status: 400, headers: { "Cache-Control": "no-store" } },
+      { status: errorStatus(error), headers: { "Cache-Control": "no-store" } },
     );
   }
 };

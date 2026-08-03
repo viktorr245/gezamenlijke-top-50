@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { assertStorageCapacity, STORAGE_ROOT } from "./storage-health";
 
@@ -11,6 +11,7 @@ const TRACK_ID_PATTERN = /^[a-zA-Z0-9_-]{1,100}$/;
 const FFMPEG_PATH = process.env.FFMPEG_PATH ?? "ffmpeg";
 const FFPROBE_PATH = process.env.FFPROBE_PATH ?? "ffprobe";
 const FFMPEG_TIMEOUT_MS = 15 * 60 * 1000;
+const GENERATED_AUDIO_PATTERN = /^[a-zA-Z0-9_-]{1,100}-[a-f0-9]{32}(?:-o)?\.[a-z0-9]{2,5}$/;
 
 const AUDIO_TYPES: Record<string, string> = {
   "audio/aac": "aac",
@@ -124,6 +125,19 @@ async function removeFile(filePath: string) {
   await unlink(filePath).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== "ENOENT") throw error;
   });
+}
+
+async function cleanupOrphanedAudioFiles(index: Record<string, StoredAudioRecord>) {
+  await ensureStorage();
+  const referenced = new Set(Object.values(index).flatMap((record) => [record.originalStoredName, record.playbackStoredName]));
+  const entries = await readdir(AUDIO_DIRECTORY, { withFileTypes: true });
+  const orphans = entries
+    .filter((entry) => entry.isFile() && GENERATED_AUDIO_PATTERN.test(entry.name) && !referenced.has(entry.name))
+    .map((entry) => path.join(AUDIO_DIRECTORY, entry.name));
+  const cleanup = await Promise.allSettled(orphans.map(removeFile));
+  if (cleanup.some((result) => result.status === "rejected")) {
+    console.error("Een of meer achtergebleven audiobestanden konden niet worden opgeruimd.");
+  }
 }
 
 async function transcodeToOpus(inputPath: string, outputPath: string) {
@@ -260,14 +274,17 @@ export async function saveAudio(
   const artist = details.artist.trim().slice(0, 200);
   if (!title || !artist) throw new Error("Titel en artiest ontbreken.");
   const extension = AUDIO_TYPES[file.type];
-  const buffer = new Uint8Array(await file.arrayBuffer());
 
   return enqueue(async () => {
     // Tijdens conversie staan origineel en browserversie tijdelijk naast een
-    // eventuele oude upload. Reserveer daarom iets meer dan alleen het bronbestand.
-    await assertStorageCapacity(file.size + Math.ceil(file.size * 0.35));
+    // eventuele oude upload. Controleer eerst of het bronbestand zelf past.
+    await assertStorageCapacity(file.size);
+    // Maak de extra kopie pas binnen de queue, zodat gelijktijdige uploads niet
+    // allemaal tegelijk maximaal 100 MB extra werkgeheugen vasthouden.
+    const buffer = new Uint8Array(await file.arrayBuffer());
     await ensureStorage();
     const index = await readIndex();
+    await cleanupOrphanedAudioFiles(index);
     const previous = index[trackId];
     const uploadId = randomUUID();
     const uploadKey = uploadId.replaceAll("-", "");
@@ -282,6 +299,10 @@ export async function saveAudio(
     try {
       await writeFile(temporaryOriginal, buffer);
       const duration = await probeAudioDuration(temporaryOriginal);
+      // Een Opus-bestand op 196 kbit/s kan groter worden dan een sterk
+      // gecomprimeerd bronbestand. Reserveer daarom op basis van speelduur.
+      const expectedPlaybackSize = Math.ceil(duration * 196_000 / 8 * 1.25);
+      await assertStorageCapacity(expectedPlaybackSize);
       await transcodeToOpus(temporaryOriginal, temporaryPlayback);
       await rename(temporaryOriginal, finalOriginal);
       await rename(temporaryPlayback, finalPlayback);
@@ -320,18 +341,27 @@ export async function saveAudio(
   });
 }
 
-export async function removeAudio(trackId: string): Promise<boolean> {
-  validateTrackId(trackId);
+export async function removeAudioBatch(trackIds: string[]): Promise<number> {
+  const ids = [...new Set(trackIds.map((trackId) => validateTrackId(trackId)))];
+  if (ids.length === 0) return 0;
   return enqueue(async () => {
     const index = await readIndex();
-    const record = index[trackId];
-    if (!record) return false;
-    await Promise.all([
+    await cleanupOrphanedAudioFiles(index);
+    const records = ids.map((trackId) => index[trackId]).filter((record): record is StoredAudioRecord => Boolean(record));
+    if (records.length === 0) return 0;
+    for (const record of records) delete index[record.trackId];
+    await writeIndex(index);
+    const cleanup = await Promise.allSettled(records.flatMap((record) => [
       removeFile(path.join(AUDIO_DIRECTORY, record.originalStoredName)),
       removeFile(path.join(AUDIO_DIRECTORY, record.playbackStoredName)),
-    ]);
-    delete index[trackId];
-    await writeIndex(index);
-    return true;
+    ]));
+    if (cleanup.some((result) => result.status === "rejected")) {
+      console.error("Een of meer verwijderde audiobestanden konden niet volledig worden opgeruimd.");
+    }
+    return records.length;
   });
+}
+
+export async function removeAudio(trackId: string): Promise<boolean> {
+  return (await removeAudioBatch([trackId])) > 0;
 }
