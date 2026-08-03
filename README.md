@@ -34,7 +34,9 @@ Het schema is vooraf en deterministisch opgebouwd. Per deelnemer komt ieder van 
 
 ### 3. Ranglijst en cd-indeling
 
-Na in totaal 600 keuzes en vijf definitieve bevestigingen berekent de server de volledige ranglijst. De vijftig geselecteerde nummers staan boven **De streep**. Klik op een nummer om alle twaalf vergelijkingen te bekijken, gegroepeerd per deelnemer. Je ziet steeds de tegenstander en welk nummer is gekozen. De inzender zelf ontbreekt daar, omdat niemand op eigen nummers stemt.
+Na in totaal 600 keuzes en vijf definitieve bevestigingen berekent de server de volledige ranglijst. De vijftig geselecteerde nummers staan boven **De streep**. Met **Uitleg bij alle cijfers** opent een leeswijzer met een echte voorbeeldregel, uitleg van alle termen, de vier rekenstappen en optioneel de exacte technische rekenregels.
+
+Klik op een nummer om alle twaalf vergelijkingen te bekijken, gegroepeerd per deelnemer. Je ziet steeds de tegenstander en welk nummer is gekozen. Het venster rekent met de echte waarden van dat nummer voor hoe vaak het in de top 50 viel, de verwachte plek en de 90%-band, en legt uit waarom het op zijn definitieve plaats staat. De inzender zelf ontbreekt bij de vergelijkingen, omdat niemand op eigen nummers stemt.
 
 Daarna:
 

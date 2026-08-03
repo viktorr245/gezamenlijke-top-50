@@ -26,26 +26,103 @@ import { members } from "../data/tracks";
 
     <div id="ranking-content" hidden>
       <div class="ranking-toolbar">
-        <h2>Alle 100 nummers</h2>
-        <details class="ranking-explainer">
-          <summary>Hoe is dit berekend?</summary>
-          <div>
-            <button class="ranking-explainer-close" type="button" aria-label="Sluit uitleg"><i class="ph ph-x" aria-hidden="true"></i></button>
-            <p>Alle 600 keuzes worden tegelijk verwerkt met een Bradley–Terry-model. Daarmee wordt de geschatte voorkeur voor ieder nummer berekend, zonder dat het tijdstip of de volgorde van stemmen voordeel geeft.</p>
-            <p>De kolom <strong>Sterkte</strong> toont die geschatte voorkeur als modelscore. Nul is het gemiddelde van alle honderd nummers; een positieve waarde ligt erboven en een negatieve waarde eronder.</p>
-            <p>De rangschikking gebruikt vervolgens 100.000 statistische steekproeven. De vijftig nummers met de grootste kans op een plek in de top 50 komen boven de streep. Iedere deelnemer en iedere vergelijking weegt even zwaar.</p>
-          </div>
-        </details>
+        <div>
+          <h2>Alle 100 nummers</h2>
+          <p>Klik op een nummer voor de keuzes en zijn exacte berekening.</p>
+        </div>
+        <button class="ranking-guide-open" id="ranking-guide-open" type="button">
+          <i class="ph ph-question" aria-hidden="true"></i>
+          Uitleg bij alle cijfers
+        </button>
       </div>
-      <div class="ranking-columns" aria-hidden="true">
-        <span>#</span><span>Nummer</span><span>Ingebracht door</span><span>Sterkte</span><span>Kans top 50</span>
+      <div class="ranking-columns">
+        <span>#</span><span>Nummer</span><span>Ingebracht door</span>
+        <button type="button" data-guide-topic="guide-strength">Sterkte <i class="ph ph-question" aria-hidden="true"></i></button>
+        <button type="button" data-guide-topic="guide-top50">Kans top 50 <i class="ph ph-question" aria-hidden="true"></i></button>
       </div>
       <ol class="ranking-list" id="ranking-list"></ol>
     </div>
   </section>
 
-  <dialog class="ranking-history-dialog" id="ranking-history-dialog" aria-labelledby="ranking-history-title">
-    <button class="ranking-history-close" type="button" aria-label="Sluiten">
+  <dialog class="ranking-detail-dialog ranking-guide-dialog" id="ranking-guide-dialog" aria-labelledby="ranking-guide-title">
+    <button class="ranking-dialog-close ranking-guide-close" type="button" aria-label="Sluiten">
+      <i class="ph ph-x" aria-hidden="true"></i>
+    </button>
+    <div id="ranking-guide-content">
+      <header class="ranking-guide-header">
+        <p class="eyebrow">Leeswijzer</p>
+        <h2 id="ranking-guide-title">Zo lees je deze ranglijst.</h2>
+        <p>Elk zichtbaar cijfer komt uit dezelfde 600 keuzes. Hieronder zie je wat ieder getal betekent en hoe de website het precies berekent.</p>
+      </header>
+
+      <section class="ranking-guide-example" aria-labelledby="ranking-guide-example-title">
+        <div class="ranking-guide-section-heading">
+          <div>
+            <p class="eyebrow">Een echte regel</p>
+            <h3 id="ranking-guide-example-title">Voorbeeld uit de huidige ranglijst</h3>
+          </div>
+          <span>De waarden hieronder worden rechtstreeks uit nummer 1 overgenomen.</span>
+        </div>
+        <div id="ranking-guide-example"></div>
+      </section>
+
+      <section class="ranking-guide-section" aria-labelledby="ranking-guide-terms-title">
+        <div class="ranking-guide-section-heading">
+          <div>
+            <p class="eyebrow">Wat betekent wat?</p>
+            <h3 id="ranking-guide-terms-title">Ieder cijfer in één oogopslag</h3>
+          </div>
+        </div>
+        <div class="ranking-guide-terms">
+          <article id="guide-position"><span>01</span><div><h4>Plek</h4><p>De definitieve positie in deze lijst. De website sorteert eerst op de <em>exacte</em> kans op top 50, daarna op verwachte plek en daarna op sterkte.</p></div></article>
+          <article id="guide-strength"><span>+1,00</span><div><h4>Sterkte</h4><p>De Bradley–Terry-modelscore. <strong>0,00</strong> is gemiddeld. Alleen het verschil tussen twee nummers telt: één punt verschil betekent ongeveer 73% geschatte voorkeur voor het sterkere nummer.</p></div></article>
+          <article id="guide-top50"><span>73%</span><div><h4>Kans top 50</h4><p>Hoe vaak dit nummer in de top 50 stond in 100.000 berekende mogelijke ranglijsten. De regel toont een afgerond heel percentage; voor de sortering gebruikt de website alle decimalen.</p></div></article>
+          <article id="guide-expected"><span>24,7</span><div><h4>Verwacht</h4><p>De gemiddelde plek over alle 100.000 mogelijke ranglijsten. Daarom kan dit een kommagetal zijn en afwijken van de definitieve plek links.</p></div></article>
+          <article id="guide-interval"><span>12–41</span><div><h4>90%: plek</h4><p>Het middelste gebied waarin 90% van de berekende posities viel. Vijf procent lag hoger en vijf procent lager. Een smalle band betekent meer zekerheid.</p></div></article>
+          <article id="guide-owner"><span><i class="member-dot" style="--member-color:#8f101b"></i></span><div><h4>Ingebracht door</h4><p>Laat alleen zien van wie het nummer komt. Er zijn geen persoonlijke quota of bonuspunten en niemand stemt op eigen nummers.</p></div></article>
+          <article id="guide-cutoff"><span>50│51</span><div><h4>De streep</h4><p>De vaste selectiegrens. De nummers op plek 1 tot en met 50 gaan mee naar de cd’s; plek 51 en lager niet.</p></div></article>
+          <article id="guide-ready"><span>5/5</span><div><h4>Van 5 klaar</h4><p>Groepsvoortgang, geen score. De ranglijst verschijnt pas wanneer alle vijf deelnemers hun 120 keuzes definitief hebben gemaakt.</p></div></article>
+          <article id="guide-stability"><span>5×</span><div><h4>Stabiliteitscontrole</h4><p>In de tooltip wordt het model vijf extra keer berekend, telkens zonder de keuzes van één deelnemer. “Stabiele keuze” betekent dat het nummer in alle vijf controles in de top 50 bleef. Dit is alleen controle-informatie en bepaalt de volgorde niet.</p></div></article>
+        </div>
+      </section>
+
+      <section class="ranking-guide-section" aria-labelledby="ranking-guide-flow-title">
+        <div class="ranking-guide-section-heading">
+          <div>
+            <p class="eyebrow">Van keuze naar uitslag</p>
+            <h3 id="ranking-guide-flow-title">Zo ontstaat precies één ranglijstregel</h3>
+          </div>
+        </div>
+        <ol class="ranking-guide-flow">
+          <li><span>1</span><div><h4>Twaalf directe vergelijkingen</h4><p>Vier andere deelnemers krijgen het nummer ieder drie keer te zien. Zo heeft ieder nummer twaalf unieke duels. Alle 600 keuzes wegen even zwaar.</p></div></li>
+          <li><span>2</span><div><h4>Alle sterktes tegelijk schatten</h4><p>Het model zoekt honderd sterktes die alle gemaakte keuzes samen zo waarschijnlijk mogelijk maken. Een keuze tegen een sterk nummer zegt daardoor meer dan alleen “één winst”.</p><div class="ranking-guide-formula"><span>P(A gekozen)</span><strong>1 / (1 + e<sup>sterkte B − sterkte A</sup>)</strong></div></div></li>
+          <li><span>3</span><div><h4>Onzekerheid 100.000 keer doorrekenen</h4><p>Rond de geschatte sterktes zit onzekerheid. De website trekt daarom 100.000 samenhangende sets van mogelijke sterktes en maakt van iedere set een volledige ranglijst van 1 tot 100.</p></div></li>
+          <li><span>4</span><div><h4>Tellen, middelen en sorteren</h4><p>Top-50-voorkomens worden geteld, alle posities worden gemiddeld en de 5%- en 95%-grenzen worden opgezocht. Daarna bepaalt de exacte top-50-kans de volgorde.</p></div></li>
+        </ol>
+      </section>
+
+      <section class="ranking-guide-section ranking-guide-history-note" aria-labelledby="ranking-guide-history-title">
+        <i class="ph ph-cursor-click" aria-hidden="true"></i>
+        <div>
+          <p class="eyebrow">Waarom dit specifieke nummer?</p>
+          <h3 id="ranking-guide-history-title">Klik op een ranglijstregel.</h3>
+          <p>Daar zie je alle twaalf ruwe keuzes, de vier stemmers, het aantal gewonnen duels en de berekening met de echte waarden van dat nummer.</p>
+        </div>
+      </section>
+
+      <details class="ranking-guide-technical">
+        <summary>De exacte technische rekenregels</summary>
+        <div>
+          <p>De sterktes minimaliseren de negatieve log-waarschijnlijkheid van alle keuzes plus <strong>0,125 × de som van alle gekwadrateerde sterktes</strong>. Die zwakke regularisatie trekt extreme uitkomsten voorzichtig naar nul en voorkomt een oneindige score bij bijvoorbeeld twaalf uit twaalf keer gekozen.</p>
+          <p>De optimalisatie gebruikt maximaal dertig Newton-stappen en stopt eerder zodra de grootste stap kleiner is dan 10<sup>−8</sup>. De inverse kromming rond het optimum levert via een Laplace-benadering de gezamenlijke onzekerheid; Cholesky-ontbinding wordt gebruikt om daaruit 100.000 sets te trekken.</p>
+          <p>De trekking is deterministisch gezaaid met de vergelijkings-id’s en winnaars. Dezelfde honderd nummers en dezelfde 600 keuzes geven dus altijd exact dezelfde uitslag. Bij volledig gelijke top-50-kans volgen verwachte plek, sterkte en ten slotte een vaste technische id als sorteersleutels.</p>
+        </div>
+      </details>
+    </div>
+  </dialog>
+
+  <dialog class="ranking-detail-dialog ranking-history-dialog" id="ranking-history-dialog" aria-labelledby="ranking-history-title">
+    <button class="ranking-dialog-close ranking-history-close" type="button" aria-label="Sluiten">
       <i class="ph ph-x" aria-hidden="true"></i>
     </button>
     <div id="ranking-history-content" aria-live="polite">
@@ -107,15 +184,38 @@ import { members } from "../data/tracks";
   const list = document.querySelector<HTMLOListElement>("#ranking-list")!;
   const copy = document.querySelector<HTMLElement>("#ranking-copy")!;
   const count = document.querySelector<HTMLElement>("#ready-count")!;
+  const guideDialog = document.querySelector<HTMLDialogElement>("#ranking-guide-dialog")!;
+  const guideContent = document.querySelector<HTMLElement>("#ranking-guide-content")!;
+  const guideExample = document.querySelector<HTMLElement>("#ranking-guide-example")!;
   const historyDialog = document.querySelector<HTMLDialogElement>("#ranking-history-dialog")!;
   const historyContent = document.querySelector<HTMLElement>("#ranking-history-content")!;
   const rankingById = new Map<string, RankedTrack>();
   const historyCache = new Map<string, TrackHistoryPayload["history"]>();
   let activeHistoryTrackId: string | undefined;
+  const rankingSamples = 100_000;
 
-  document.querySelector<HTMLButtonElement>(".ranking-explainer-close")?.addEventListener("click", () => {
-    const details = document.querySelector<HTMLDetailsElement>(".ranking-explainer");
-    if (details) details.open = false;
+  function openGuide(topicId?: string) {
+    if (!guideDialog.open) guideDialog.showModal();
+    if (!topicId) {
+      guideContent.scrollTop = 0;
+      return;
+    }
+    requestAnimationFrame(() => {
+      const topic = document.getElementById(topicId);
+      if (!topic) return;
+      guideContent.scrollTop += topic.getBoundingClientRect().top - guideContent.getBoundingClientRect().top - 20;
+      topic.classList.add("is-highlighted");
+      window.setTimeout(() => topic.classList.remove("is-highlighted"), 1100);
+    });
+  }
+
+  document.querySelector<HTMLButtonElement>("#ranking-guide-open")?.addEventListener("click", () => openGuide());
+  document.querySelector<HTMLButtonElement>(".ranking-guide-close")?.addEventListener("click", () => guideDialog.close());
+  document.querySelectorAll<HTMLButtonElement>("[data-guide-topic]").forEach((button) => {
+    button.addEventListener("click", () => openGuide(button.dataset.guideTopic));
+  });
+  guideDialog.addEventListener("click", (event) => {
+    if (event.target === guideDialog) guideDialog.close();
   });
 
   document.querySelector<HTMLButtonElement>(".ranking-history-close")?.addEventListener("click", () => historyDialog.close());
@@ -137,6 +237,33 @@ import { members } from "../data/tracks";
       maximumFractionDigits: 2,
       signDisplay: "exceptZero",
     });
+  }
+
+  function formatDetailedStrength(value: number): string {
+    const roundedValue = Math.abs(value) < 0.00005 ? 0 : value;
+    return roundedValue.toLocaleString("nl-NL", {
+      minimumFractionDigits: 4,
+      maximumFractionDigits: 4,
+      signDisplay: "exceptZero",
+    });
+  }
+
+  function guideExampleMarkup(track: RankedTrack) {
+    const member = getMember(track.owner);
+    const expectedRank = track.expectedRank.toLocaleString("nl-NL", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+    const exactChance = (track.top50Probability * 100).toLocaleString("nl-NL", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+    return `
+      <div class="ranking-guide-example-track">
+        <img src="${escapeHtml(track.cover)}" alt="" width="74" height="74" />
+        <div><strong>${escapeHtml(track.title)}</strong><span>${escapeHtml(track.artist)}</span><small><i class="member-dot" style="--member-color:${member.color}"></i> Ingebracht door ${escapeHtml(member.name)}</small></div>
+      </div>
+      <dl class="ranking-guide-example-values">
+        <div><dt>Plek</dt><dd>${String(track.rank).padStart(2, "0")}</dd><small>Definitieve volgorde</small></div>
+        <div><dt>Sterkte</dt><dd>${formatStrength(track.strength)}</dd><small>Exact ${formatDetailedStrength(track.strength)}</small></div>
+        <div><dt>Kans top 50</dt><dd>${Math.round(track.top50Probability * 100)}%</dd><small>Exact ${exactChance}%</small></div>
+        <div><dt>Verwacht</dt><dd>${expectedRank}</dd><small>Gemiddelde plek</small></div>
+        <div><dt>90%: plek</dt><dd>${track.rankLow}–${track.rankHigh}</dd><small>Middelste 90%</small></div>
+      </dl>`;
   }
 
   function rowMarkup(track: RankedTrack) {
@@ -166,6 +293,10 @@ import { members } from "../data/tracks";
     const selectedPercentage = history.comparisonCount
       ? Math.round(history.selectedThisTrackCount / history.comparisonCount * 100)
       : 0;
+    const top50Count = Math.round(rankedTrack.top50Probability * rankingSamples);
+    const exactTop50Percentage = (rankedTrack.top50Probability * 100).toLocaleString("nl-NL", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+    const rankPositionTotal = Math.round(rankedTrack.expectedRank * rankingSamples);
+    const expectedRank = rankedTrack.expectedRank.toLocaleString("nl-NL", { minimumFractionDigits: 1, maximumFractionDigits: 2 });
     const voterMarkup = history.voters.map((voterHistory) => {
       const voter = getMember(voterHistory.voterId);
       const otherCount = voterHistory.comparisons.length - voterHistory.selectedThisTrackCount;
@@ -203,9 +334,23 @@ import { members } from "../data/tracks";
       <div class="ranking-history-summary">
         <p><strong>${history.selectedThisTrackCount}</strong><span>van ${history.comparisonCount} keer gekozen</span></p>
         <p><strong>${selectedPercentage}%</strong><span>duels gewonnen</span></p>
+        <p><strong>${formatStrength(rankedTrack.strength)}</strong><span>modelsterkte</span></p>
         <p><strong>${Math.round(rankedTrack.top50Probability * 100)}%</strong><span>kans op top 50</span></p>
       </div>
       <p class="ranking-history-context">Omdat ${escapeHtml(owner.name)} dit nummer inzond, stemden de andere vier deelnemers er ieder drie keer over. De eindplek gebruikt niet alleen het aantal keuzes, maar ook de geschatte sterkte van de tegenstanders en de onzekerheid in het Bradley–Terry-model.</p>
+      <section class="ranking-history-calculation">
+        <div class="ranking-history-calculation-heading">
+          <div><p class="eyebrow">De exacte berekening</p><h3>Waarom plek ${rankedTrack.rank}?</h3></div>
+          <button type="button" data-guide-topic="guide-position">Leg alle termen uit <i class="ph ph-arrow-up-right" aria-hidden="true"></i></button>
+        </div>
+        <ol>
+          <li><span>1</span><div><strong>Alle 600 keuzes gezamenlijk geschat</strong><small>de 12 directe duels én de verbindingen via alle tegenstanders</small></div><b>= sterkte ${formatDetailedStrength(rankedTrack.strength)}</b></li>
+          <li><span>2</span><div><strong>${top50Count.toLocaleString("nl-NL")} van 100.000</strong><small>mogelijke ranglijsten in de top 50</small></div><b>= ${exactTop50Percentage}% kans</b></li>
+          <li><span>3</span><div><strong>${rankPositionTotal.toLocaleString("nl-NL")} posities ÷ 100.000</strong><small>alle berekende posities bij elkaar</small></div><b>= verwacht ${expectedRank}</b></li>
+          <li><span>4</span><div><strong>90% viel op plek ${rankedTrack.rankLow}–${rankedTrack.rankHigh}</strong><small>de 5% hoogste en 5% laagste uitkomsten vallen erbuiten</small></div><b>onzekerheidsband</b></li>
+        </ol>
+        <p>Alle honderd nummers worden gesorteerd op hun niet-afgeronde top-50-kans. Bij exact gelijke kans volgt de verwachte plek, daarna de modelsterkte. Met die volledige waarden eindigt dit nummer op <strong>plek ${rankedTrack.rank}</strong>. De zichtbare hele procenten kunnen dus gelijk lijken terwijl de onderliggende kansen nog verschillen.</p>
+      </section>
       <div class="ranking-history-section-heading">
         <h3>Alle vergelijkingen</h3>
         <span>${history.comparisonCount} keuzes door ${history.voters.length} deelnemers</span>
@@ -260,6 +405,13 @@ import { members } from "../data/tracks";
     if (button?.dataset.retryHistory) void openHistory(button.dataset.retryHistory);
   });
 
+  historyContent.addEventListener("click", (event) => {
+    const button = (event.target as Element).closest<HTMLButtonElement>("[data-guide-topic]");
+    if (!button?.dataset.guideTopic) return;
+    historyDialog.close();
+    openGuide(button.dataset.guideTopic);
+  });
+
   function render(payload: RankingPayload) {
     count.textContent = String(payload.status.completedVoterCount);
     for (const status of payload.status.members) {
@@ -282,6 +434,7 @@ import { members } from "../data/tracks";
     copy.textContent = "Berekend uit alle 600 keuzes; de kans houdt ook rekening met onzekerheid rond de grens.";
     rankingById.clear();
     payload.ranking.forEach((track) => rankingById.set(track.id, track));
+    guideExample.innerHTML = guideExampleMarkup(payload.ranking[0]);
     list.innerHTML = payload.ranking.map(rowMarkup).join("");
   }
 

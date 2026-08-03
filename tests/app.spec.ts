@@ -1169,6 +1169,17 @@ test("de definitieve ranglijst toont alle 100 nummers en de grens", async ({ pag
   await expect(page.locator(isMobile ? ".rank-strength-mobile" : ".rank-strength").first()).toBeVisible();
   await expect(page.locator(".rank-uncertainty")).toHaveCount(100);
   await expect(page.locator(".rank-uncertainty").first()).toContainText("90%: plek");
+  await page.getByRole("button", { name: "Uitleg bij alle cijfers" }).click();
+  const guideDialog = page.getByRole("dialog", { name: "Zo lees je deze ranglijst." });
+  await expect(guideDialog).toBeVisible();
+  await expect(guideDialog.locator(".ranking-guide-example-values > div")).toHaveCount(5);
+  await expect(guideDialog.locator(".ranking-guide-terms article")).toHaveCount(9);
+  await expect(guideDialog.locator(".ranking-guide-flow > li")).toHaveCount(4);
+  await expect(guideDialog).toContainText(historyTrack.title);
+  await guideDialog.getByText("De exacte technische rekenregels").click();
+  await expect(guideDialog).toContainText("0,125 × de som");
+  await guideDialog.getByRole("button", { name: "Sluiten" }).click();
+  await expect(guideDialog).toBeHidden();
   const cutoffMargins = await page.locator(".cutoff-marker").evaluate((element) => {
     const style = getComputedStyle(element);
     return [style.marginTop, style.marginBottom];
@@ -1185,9 +1196,15 @@ test("de definitieve ranglijst toont alle 100 nummers en de grens", async ({ pag
   await expect(historyDialog.locator(".ranking-history-voter")).toHaveCount(4);
   await expect(historyDialog.locator(".ranking-history-choice.picked-current")).toHaveCount(8);
   await expect(historyDialog).toContainText("van 12 keer gekozen");
+  await expect(historyDialog).toContainText("modelsterkte");
+  await expect(historyDialog.locator(".ranking-history-calculation")).toContainText("100.000");
+  await expect(historyDialog.locator(".ranking-history-calculation")).toContainText("Alle 600 keuzes gezamenlijk geschat");
+  await expect(historyDialog.locator(".ranking-history-calculation")).toContainText("Waarom plek 1?");
   await expect(historyDialog).toContainText("Bradley–Terry-model");
-  await historyDialog.getByRole("button", { name: "Sluiten" }).click();
+  await historyDialog.getByRole("button", { name: "Leg alle termen uit" }).click();
   await expect(historyDialog).toBeHidden();
+  await expect(guideDialog).toBeVisible();
+  await guideDialog.getByRole("button", { name: "Sluiten" }).click();
 });
 
 test("de cd-pagina verdeelt automatisch, ordent toegankelijk en laat alleen Viktor afronden", async ({ page, isMobile }) => {
