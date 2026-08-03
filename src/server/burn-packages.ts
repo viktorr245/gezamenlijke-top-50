@@ -6,7 +6,7 @@ import { formatDuration, type Track } from "../data/tracks";
 import { getAudioAsset } from "./audio-storage";
 import { getDiscLayout, type DiscLayout } from "./disc-layout-storage";
 import { loadGroupData } from "./group-state";
-import { calculateRanking } from "./ranking";
+import { calculateFinalRanking } from "./ranking";
 import { assertStorageCapacity, STORAGE_ROOT } from "./storage-health";
 import { ZipWriter } from "./zip-writer";
 
@@ -42,7 +42,7 @@ export async function loadFinalBurnContext(): Promise<{ layout: DiscLayout; trac
   if (!group.status.votingComplete) throw new Error("De ranglijst staat nog niet vast.");
   const layout = await getDiscLayout();
   if (!layout?.finalizedAt) throw new Error("De cd-indeling is nog niet definitief.");
-  const ranking = calculateRanking(group.tracks, Object.values(group.voteChoices).flat());
+  const ranking = calculateFinalRanking(group.tracks, Object.values(group.voteChoices).flat());
   const expected = new Set(ranking.slice(0, 50).map((track) => track.id));
   if (layout.topTrackIds.length !== expected.size || layout.topTrackIds.some((id) => !expected.has(id))) {
     throw new Error("De cd-indeling hoort niet meer bij de huidige ranglijst.");

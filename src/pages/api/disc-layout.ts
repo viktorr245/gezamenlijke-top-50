@@ -3,7 +3,7 @@ import { AuthorizationError, requireOrganizer } from "../../server/auth";
 import { ensureBurnPackages, resolveBurnAudioSources, validateBurnCapacity } from "../../server/burn-packages";
 import { finalizeDiscLayout, getDiscLayout, saveDiscLayout } from "../../server/disc-layout-storage";
 import { loadGroupData } from "../../server/group-state";
-import { calculateRanking } from "../../server/ranking";
+import { calculateFinalRanking } from "../../server/ranking";
 import { isSameOrigin } from "../../server/request-security";
 
 export const prerender = false;
@@ -16,7 +16,7 @@ function errorResponse(error: unknown, fallbackStatus = 400) {
 async function rankingData() {
   const group = await loadGroupData();
   if (!group.status.votingComplete) return { group, ranking: null, topTracks: [] };
-  const ranking = calculateRanking(group.tracks, Object.values(group.voteChoices).flat());
+  const ranking = calculateFinalRanking(group.tracks, Object.values(group.voteChoices).flat());
   return { group, ranking, topTracks: ranking.slice(0, 50) };
 }
 

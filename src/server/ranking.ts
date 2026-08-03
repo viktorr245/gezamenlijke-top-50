@@ -14,6 +14,8 @@ export type RankedTrack = Track & {
   leaveOneOutSelections: number;
 };
 
+export const FINAL_RANKING_SAMPLES = 100_000;
+
 type IndexedChoice = { winner: number; loser: number; voterId: string };
 
 function sigmoid(value: number): number {
@@ -122,7 +124,16 @@ function selectedIndices(theta: number[], count = 50): Set<number> {
   return new Set(theta.map((value, index) => ({ value, index })).sort((a, b) => b.value - a.value || a.index - b.index).slice(0, count).map((item) => item.index));
 }
 
-export function calculateRanking(tracksValue: Track[], rawChoices: VoteChoice[], samples = 2000): RankedTrack[] {
+function rankAt(counts: number[], sampleIndex: number): number {
+  let cumulative = 0;
+  for (let rank = 0; rank < counts.length; rank += 1) {
+    cumulative += counts[rank];
+    if (cumulative > sampleIndex) return rank + 1;
+  }
+  return counts.length;
+}
+
+export function calculateRanking(tracksValue: Track[], rawChoices: VoteChoice[], samples = FINAL_RANKING_SAMPLES): RankedTrack[] {
   if (!Number.isSafeInteger(samples) || samples <= 0) throw new Error("Het aantal steekproeven moet een positief geheel getal zijn.");
   const tracks = [...tracksValue].sort((a, b) => a.id.localeCompare(b.id));
   if (tracks.length !== 100) throw new Error("De ranglijst vereist precies honderd nummers.");
@@ -140,7 +151,8 @@ export function calculateRanking(tracksValue: Track[], rawChoices: VoteChoice[],
   const choiceSeed = rawChoices.map((choice) => `${choice.id}:${choice.winnerId}`).sort().join("|");
   const normal = normalGenerator(choiceSeed);
   const topCounts = Array(tracks.length).fill(0);
-  const ranks = Array.from({ length: tracks.length }, () => [] as number[]);
+  const rankCounts = Array.from({ length: tracks.length }, () => Array(tracks.length).fill(0) as number[]);
+  const rankSums = Array(tracks.length).fill(0) as number[];
   for (let sample = 0; sample < samples; sample += 1) {
     const z = Array.from({ length: tracks.length }, () => normal());
     const noise = Array(tracks.length).fill(0);
@@ -152,7 +164,8 @@ export function calculateRanking(tracksValue: Track[], rawChoices: VoteChoice[],
     const order = theta.map((value, index) => ({ index, value: value + noise[index] }))
       .sort((a, b) => b.value - a.value || a.index - b.index);
     order.forEach((item, rank) => {
-      ranks[item.index].push(rank + 1);
+      rankCounts[item.index][rank] += 1;
+      rankSums[item.index] += rank + 1;
       if (rank < 50) topCounts[item.index] += 1;
     });
   }
@@ -167,16 +180,15 @@ export function calculateRanking(tracksValue: Track[], rawChoices: VoteChoice[],
   const voters = [...new Set(choices.map((choice) => choice.voterId))];
   const leaveOneOut = voters.map((voter) => selectedIndices(posterior(tracks, choices.filter((choice) => choice.voterId !== voter), theta).theta));
   const metrics = tracks.map((track, index) => {
-    const sortedRanks = ranks[index].sort((a, b) => a - b);
-    const expectedRank = sortedRanks.reduce((sum, rank) => sum + rank, 0) / sortedRanks.length;
+    const expectedRank = rankSums[index] / samples;
     return {
       track,
       index,
       strength: theta[index],
       top50Probability: topCounts[index] / samples,
       expectedRank,
-      rankLow: sortedRanks[Math.floor(samples * 0.05)],
-      rankHigh: sortedRanks[Math.min(samples - 1, Math.floor(samples * 0.95))],
+      rankLow: rankAt(rankCounts[index], Math.floor(samples * 0.05)),
+      rankHigh: rankAt(rankCounts[index], Math.min(samples - 1, Math.floor(samples * 0.95))),
       winRate: games[index] ? wins[index] / games[index] : 0,
       leaveOneOutSelections: leaveOneOut.filter((selection) => selection.has(index)).length,
     };
@@ -199,4 +211,19 @@ export function calculateRanking(tracksValue: Track[], rawChoices: VoteChoice[],
     winRate: item.winRate,
     leaveOneOutSelections: item.leaveOneOutSelections,
   }));
+}
+
+let finalRankingCache: { fingerprint: string; ranking: RankedTrack[] } | undefined;
+
+export function calculateFinalRanking(tracks: Track[], choices: VoteChoice[]): RankedTrack[] {
+  const fingerprint = createHash("sha256").update(JSON.stringify({
+    tracks: [...tracks].sort((left, right) => left.id.localeCompare(right.id)),
+    choices: [...choices]
+      .map(({ id, voterId, leftId, rightId, winnerId, loserId }) => ({ id, voterId, leftId, rightId, winnerId, loserId }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
+  })).digest("hex");
+  if (finalRankingCache?.fingerprint === fingerprint) return finalRankingCache.ranking;
+  const ranking = calculateRanking(tracks, choices, FINAL_RANKING_SAMPLES);
+  finalRankingCache = { fingerprint, ranking };
+  return ranking;
 }

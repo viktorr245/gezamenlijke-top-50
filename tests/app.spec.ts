@@ -7,7 +7,7 @@ import { authenticatedMember, requireMember, sessionCookie, verifyPin } from "..
 import { finalizeDiscLayout, getDiscLayout, saveDiscLayout } from "../src/server/disc-layout-storage";
 import { startPathForPhase } from "../src/server/group-state";
 import { listPinnedITunesTracks, pinITunesTrack, searchITunes } from "../src/server/itunes-cache";
-import { calculateRanking } from "../src/server/ranking";
+import { calculateFinalRanking, calculateRanking, FINAL_RANKING_SAMPLES } from "../src/server/ranking";
 import { finalizeSubmission, getSubmission, listSubmissions, saveDraftSubmission, type SubmissionIndex } from "../src/server/submission-storage";
 import { buildComparisonSchedules, campaignIdFor, castVote, finalizeVoting, listVotes, loadVotingState, undoLastVote, type VoteChoice } from "../src/server/vote-storage";
 import { ZipWriter } from "../src/server/zip-writer";
@@ -325,6 +325,10 @@ test("de batchranglijst is deterministisch en onafhankelijk van invoervolgorde",
   expect(first[0].top50Probability).toBeGreaterThan(first[99].top50Probability);
   expect(first.every((track) => track.rankLow <= track.expectedRank && track.expectedRank <= track.rankHigh)).toBe(true);
   expect(() => calculateRanking(tracks, choices, 0)).toThrow(/positief geheel getal/);
+  expect(FINAL_RANKING_SAMPLES).toBe(100_000);
+  const final = calculateFinalRanking(tracks, choices);
+  expect(calculateFinalRanking([...tracks].reverse(), [...choices].reverse())).toBe(final);
+  expect(final.filter((track) => track.selected)).toHaveLength(50);
 });
 
 test("stemmen worden in de vaste volgorde bewaard en kunnen één stap terug", async ({}, testInfo) => {
