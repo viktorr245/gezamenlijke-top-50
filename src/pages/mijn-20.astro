@@ -111,7 +111,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
       <label class="manual-field manual-field--wide" for="youtube-audio-url">
         <span>YouTube-link</span>
         <input id="youtube-audio-url" name="youtubeUrl" type="url" inputmode="url" autocomplete="off" maxlength="2048" placeholder="https://www.youtube.com/watch?v=…" required />
-        <small>Maximaal 100 MB. Afspeellijsten, privévideo’s en andere websites worden niet geaccepteerd.</small>
+        <small>Maximaal 300 MB. Afspeellijsten, privévideo’s en andere websites worden niet geaccepteerd.</small>
       </label>
       <p class="manual-track-error" id="youtube-audio-error" role="alert" aria-live="assertive"></p>
       <div class="manual-track-actions">
@@ -148,6 +148,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   };
 
   const memberId = getActiveMember();
+  const MAX_AUDIO_BYTES = 300 * 1024 * 1024;
   const state: { submissionIds: string[]; customTracks: Record<string, Track> } = { submissionIds: [], customTracks: {} };
   const list = document.querySelector<HTMLOListElement>("#submission-list")!;
   const page = document.querySelector<HTMLElement>(".submission-page")!;
@@ -829,8 +830,8 @@ import ProgressMarks from "../components/ProgressMarks.astro";
       setMessage("Kies een geldig audiobestand.", true);
       return;
     }
-    if (file.size > 100 * 1024 * 1024) {
-      setMessage("Het audiobestand mag maximaal 100 MB zijn.", true);
+    if (file.size > MAX_AUDIO_BYTES) {
+      setMessage("Het audiobestand mag maximaal 300 MB zijn.", true);
       return;
     }
 
@@ -1139,7 +1140,9 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   });
 
   document.addEventListener("click", (event) => {
-    if (searchPanel.hidden || searchAnchor.contains(event.target as Node)) return;
+    // Het preview-icoon kan tijdens deze klik worden vervangen. Het vaste
+    // eventpad blijft dan wel betrouwbaar aangeven dat de klik binnen was.
+    if (searchPanel.hidden || event.composedPath().includes(searchAnchor)) return;
     setSearchOpen(false);
   });
 

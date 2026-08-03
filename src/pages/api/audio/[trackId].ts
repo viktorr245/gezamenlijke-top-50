@@ -15,7 +15,7 @@ function errorResponse(message: string, status: number) {
 
 function audioErrorStatus(error: unknown, message: string): number {
   if (error instanceof AuthorizationError) return error.status;
-  if (message.includes("100 MB")) return 413;
+  if (message.includes("300 MB")) return 413;
   if (message.includes("opslaglimiet") || message.includes("schijfruimte")) return 507;
   if (message.includes("definitieve inzending")) return 409;
   if (message.includes("jouw inzending")) return 403;

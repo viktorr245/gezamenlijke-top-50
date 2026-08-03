@@ -4,7 +4,7 @@ import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from "n
 import path from "node:path";
 import { assertStorageCapacity, STORAGE_ROOT } from "./storage-health";
 
-const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
+const MAX_AUDIO_BYTES = 300 * 1024 * 1024;
 const AUDIO_DIRECTORY = path.join(STORAGE_ROOT, "audio");
 const INDEX_PATH = path.join(STORAGE_ROOT, "audio-index.json");
 const TRACK_ID_PATTERN = /^[a-zA-Z0-9_-]{1,100}$/;
@@ -287,11 +287,11 @@ function runYtDlp(url: string, outputTemplate: string): Promise<void> {
       "--socket-timeout", "20",
       "--retries", "3",
       "--fragment-retries", "3",
-      "--max-filesize", "100M",
+      "--max-filesize", "300M",
       "--no-js-runtimes",
       "--js-runtimes", "node",
       "--use-extractors", "youtube",
-      "--format", "bestaudio[filesize<=100M]/bestaudio[filesize_approx<=100M]/bestaudio",
+      "--format", "bestaudio[filesize<=300M]/bestaudio[filesize_approx<=300M]/bestaudio",
       "--output", outputTemplate,
       url,
     ], { stdio: ["ignore", "ignore", "pipe"] });
@@ -321,7 +321,7 @@ function runYtDlp(url: string, outputTemplate: string): Promise<void> {
       if (code === 0) return finish();
       const normalizedError = stderr.toLocaleLowerCase("en-US");
       if (normalizedError.includes("larger than max-filesize") || normalizedError.includes("max-filesize")) {
-        return finish(new Error("De YouTube-audio is groter dan 100 MB."));
+        return finish(new Error("De YouTube-audio is groter dan 300 MB."));
       }
       if (normalizedError.includes("video unavailable") || normalizedError.includes("private video") || normalizedError.includes("sign in")) {
         return finish(new Error("Deze YouTube-video is niet openbaar beschikbaar."));
@@ -381,7 +381,7 @@ async function savePreparedAudio(
       const source = await prepare(workingDirectory);
       const sourceStat = await stat(source.path);
       if (!sourceStat.isFile() || sourceStat.size <= 0) throw new Error("Het audiobestand is leeg.");
-      if (sourceStat.size > MAX_AUDIO_BYTES) throw new Error("Het audiobestand mag maximaal 100 MB zijn.");
+      if (sourceStat.size > MAX_AUDIO_BYTES) throw new Error("Het audiobestand mag maximaal 300 MB zijn.");
       if (!EXTENSION_TYPES[source.extension] || !AUDIO_TYPES[source.mimeType]) {
         throw new Error("De gevonden audio heeft geen ondersteund bestandsformaat.");
       }
@@ -448,7 +448,7 @@ export function validateTrackId(trackId: string | undefined): string {
 export function validateAudioFile(file: File) {
   if (!AUDIO_TYPES[file.type]) throw new Error("Gebruik een MP3-, M4A-, WAV-, OGG-, WebM-, AAC- of FLAC-bestand.");
   if (file.size <= 0) throw new Error("Het audiobestand is leeg.");
-  if (file.size > MAX_AUDIO_BYTES) throw new Error("Het audiobestand mag maximaal 100 MB zijn.");
+  if (file.size > MAX_AUDIO_BYTES) throw new Error("Het audiobestand mag maximaal 300 MB zijn.");
 }
 
 export async function listAudioRecords(): Promise<Record<string, AudioRecord>> {

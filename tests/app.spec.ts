@@ -584,6 +584,8 @@ test("audio bewaart het origineel en maakt een Opus-afspeelbestand", async ({}, 
   process.env.STORAGE_DIR = directory;
   try {
     const storage = await import("../src/server/audio-storage");
+    expect(() => storage.validateAudioFile({ type: "audio/mpeg", size: 300 * 1024 * 1024 } as File)).not.toThrow();
+    expect(() => storage.validateAudioFile({ type: "audio/mpeg", size: 300 * 1024 * 1024 + 1 } as File)).toThrow("300 MB");
     const wav = createWav();
     const record = await storage.saveAudio("audio-test", new File([Uint8Array.from(wav)], "origineel.wav", { type: "audio/wav" }), {
       title: "Testnummer",
@@ -648,6 +650,8 @@ copyFileSync(process.env.YTDLP_TEST_SOURCE, template.replace("%(ext)s", "wav"));
     const downloaderArgs = JSON.parse(await readFile(ytArgs, "utf8")) as string[];
     expect(downloaderArgs).toContain("--no-playlist");
     expect(downloaderArgs).toContain("--max-filesize");
+    expect(downloaderArgs[downloaderArgs.indexOf("--max-filesize") + 1]).toBe("300M");
+    expect(downloaderArgs[downloaderArgs.indexOf("--format") + 1]).toContain("filesize<=300M");
     expect(downloaderArgs.at(-1)).toBe("https://www.youtube.com/watch?v=BaW_jenozKc");
 
     expect(await storage.removeAudioBatch(["audio-test", "audio-tweede", "audio-youtube"])).toBe(3);
@@ -836,6 +840,10 @@ test("Mijn 20 zoekt, bewaart centraal en maakt audio duidelijk verplicht", async
   let audioUploads = 0;
   let youtubeImports = 0;
   let receivedYouTubeUrl = "";
+  await page.route("https://example.test/preview.m4a", (route) => route.fulfill({
+    body: createWav(),
+    contentType: "audio/wav",
+  }));
   await page.route("**/api/submissions/viktor", async (route) => {
     if (route.request().method() === "GET") return route.fulfill({ json: { submission: null } });
     const body = route.request().postDataJSON() as { tracks: Track[] };
@@ -873,6 +881,12 @@ test("Mijn 20 zoekt, bewaart centraal en maakt audio duidelijk verplicht", async
   await expect(input).toBeEnabled();
   await input.fill("nummer");
   await page.locator("#add-track-form").getByRole("button", { name: "Zoeken" }).click();
+  const previewButton = page.locator(".search-preview");
+  await previewButton.click();
+  await expect(previewButton).toHaveAttribute("aria-pressed", "true");
+  await previewButton.click();
+  await expect(page.locator("#track-search-results")).toBeVisible();
+  await expect(previewButton).toHaveAttribute("aria-pressed", "false");
   if (isMobile) {
     for (const control of [page.locator(".search-preview"), page.locator(".search-add")]) {
       const box = await control.boundingBox();

@@ -77,7 +77,7 @@ Audio kan op twee manieren worden toegevoegd:
 - upload een MP3-, M4A-, WAV-, OGG-, WebM-, AAC- of FLAC-bestand of sleep het naar het nummer;
 - plak een link naar één openbare YouTube-video. De server gebruikt `yt-dlp` om de beste beschikbare audiostream op te halen. Kanalen, afspeellijsten, privévideo’s en links naar andere websites worden geweigerd.
 
-Voor beide routes geldt een maximum van 100 MB. Gebruik alleen een YouTube-link wanneer je de audio ook mag downloaden en gebruiken.
+Voor beide routes geldt een maximum van 300 MB. Gebruik alleen een YouTube-link wanneer je de audio ook mag downloaden en gebruiken.
 
 De server bewaart vervolgens:
 
