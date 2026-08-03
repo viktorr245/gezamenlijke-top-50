@@ -42,6 +42,18 @@ import { members } from "../data/tracks";
       <ol class="ranking-list" id="ranking-list"></ol>
     </div>
   </section>
+
+  <dialog class="ranking-history-dialog" id="ranking-history-dialog" aria-labelledby="ranking-history-title">
+    <button class="ranking-history-close" type="button" aria-label="Sluiten">
+      <i class="ph ph-x" aria-hidden="true"></i>
+    </button>
+    <div id="ranking-history-content" aria-live="polite">
+      <div class="ranking-history-loading">
+        <span class="search-loader" aria-hidden="true"></span>
+        <h2 id="ranking-history-title">Keuzes laden…</h2>
+      </div>
+    </div>
+  </dialog>
 </AppShell>
 
 <script>
@@ -69,15 +81,47 @@ import { members } from "../data/tracks";
     ranking: RankedTrack[] | null;
   };
 
+  type TrackHistoryPayload = {
+    history: {
+      track: Track;
+      comparisonCount: number;
+      selectedThisTrackCount: number;
+      selectedOtherTrackCount: number;
+      voters: Array<{
+        voterId: string;
+        selectedThisTrackCount: number;
+        comparisons: Array<{
+          id: string;
+          opponent: Track;
+          selectedThisTrack: boolean;
+          chosenAt: string;
+        }>;
+      }>;
+    };
+  };
+
   const gate = document.querySelector<HTMLElement>("#ranking-gate")!;
   const content = document.querySelector<HTMLElement>("#ranking-content")!;
   const list = document.querySelector<HTMLOListElement>("#ranking-list")!;
   const copy = document.querySelector<HTMLElement>("#ranking-copy")!;
   const count = document.querySelector<HTMLElement>("#ready-count")!;
+  const historyDialog = document.querySelector<HTMLDialogElement>("#ranking-history-dialog")!;
+  const historyContent = document.querySelector<HTMLElement>("#ranking-history-content")!;
+  const rankingById = new Map<string, RankedTrack>();
+  const historyCache = new Map<string, TrackHistoryPayload["history"]>();
+  let activeHistoryTrackId: string | undefined;
 
   document.querySelector<HTMLButtonElement>(".ranking-explainer-close")?.addEventListener("click", () => {
     const details = document.querySelector<HTMLDetailsElement>(".ranking-explainer");
     if (details) details.open = false;
+  });
+
+  document.querySelector<HTMLButtonElement>(".ranking-history-close")?.addEventListener("click", () => historyDialog.close());
+  historyDialog.addEventListener("click", (event) => {
+    if (event.target === historyDialog) historyDialog.close();
+  });
+  historyDialog.addEventListener("close", () => {
+    activeHistoryTrackId = undefined;
   });
 
   function escapeHtml(value: unknown): string {
@@ -89,18 +133,119 @@ import { members } from "../data/tracks";
     const stability = track.leaveOneOutSelections === 5 ? "Stabiele keuze" : `${track.leaveOneOutSelections} van 5 controles in de top 50`;
     const expectedRank = track.expectedRank.toLocaleString("nl-NL", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
     return `
-      <li class="ranking-row ${track.selected ? "" : "outside"}" data-rank="${track.rank}" title="Verwachte plek ${track.expectedRank.toFixed(1)} · 90%-interval ${track.rankLow}–${track.rankHigh} · ${stability}">
-        <span class="rank-number">${String(track.rank).padStart(2, "0")}</span>
-        <img src="${escapeHtml(track.cover)}" alt="" width="64" height="64" />
-        <span class="rank-track">
-          <span class="rank-track-main"><strong>${escapeHtml(track.title)}</strong><span>${escapeHtml(track.artist)}</span></span>
-          <small class="rank-uncertainty">Verwacht ${expectedRank} · 90%: plek ${track.rankLow}–${track.rankHigh}</small>
-        </span>
-        <span class="rank-owner"><i class="member-dot" style="--member-color:${member.color}"></i>${member.name}</span>
-        <strong class="rank-score">${Math.round(track.top50Probability * 100)}%</strong>
+      <li class="ranking-row ${track.selected ? "" : "outside"}" data-rank="${track.rank}">
+        <button class="ranking-row-button" type="button" data-history-track-id="${escapeHtml(track.id)}" aria-label="Bekijk de keuzes voor ${escapeHtml(track.title)}" title="Verwachte plek ${track.expectedRank.toFixed(1)} · 90%-interval ${track.rankLow}–${track.rankHigh} · ${stability} · Klik voor alle keuzes">
+          <span class="rank-number">${String(track.rank).padStart(2, "0")}</span>
+          <img src="${escapeHtml(track.cover)}" alt="" width="64" height="64" />
+          <span class="rank-track">
+            <span class="rank-track-main"><strong>${escapeHtml(track.title)}</strong><span>${escapeHtml(track.artist)}</span></span>
+            <small class="rank-uncertainty">Verwacht ${expectedRank} · 90%: plek ${track.rankLow}–${track.rankHigh}</small>
+          </span>
+          <span class="rank-owner"><i class="member-dot" style="--member-color:${member.color}"></i>${member.name}</span>
+          <strong class="rank-score"><span>${Math.round(track.top50Probability * 100)}%</span><i class="ph ph-caret-right" aria-hidden="true"></i></strong>
+        </button>
       </li>
       ${track.rank === 50 ? '<li class="cutoff-marker"><span>De streep</span><small>Deze 50 gaan mee.</small></li>' : ""}`;
   }
+
+  function historyMarkup(history: TrackHistoryPayload["history"], rankedTrack: RankedTrack) {
+    const owner = getMember(history.track.owner);
+    const selectedPercentage = history.comparisonCount
+      ? Math.round(history.selectedThisTrackCount / history.comparisonCount * 100)
+      : 0;
+    const voterMarkup = history.voters.map((voterHistory) => {
+      const voter = getMember(voterHistory.voterId);
+      const otherCount = voterHistory.comparisons.length - voterHistory.selectedThisTrackCount;
+      const choices = voterHistory.comparisons.map((comparison) => `
+        <li class="ranking-history-choice ${comparison.selectedThisTrack ? "picked-current" : "picked-other"}">
+          <span class="ranking-history-outcome">
+            <i class="ph ${comparison.selectedThisTrack ? "ph-check" : "ph-arrow-right"}" aria-hidden="true"></i>
+            <span><strong>${comparison.selectedThisTrack ? "Dit nummer" : "De ander"}</strong><small>gekozen</small></span>
+          </span>
+          <span class="ranking-history-opponent">
+            <img src="${escapeHtml(comparison.opponent.cover)}" alt="" width="52" height="52" />
+            <span><small>Tegen</small><strong>${escapeHtml(comparison.opponent.title)}</strong><span>${escapeHtml(comparison.opponent.artist)}</span></span>
+          </span>
+        </li>`).join("");
+      return `
+        <section class="ranking-history-voter">
+          <header>
+            <span><i class="member-dot" style="--member-color:${voter.color}"></i><strong>${escapeHtml(voter.name)}</strong></span>
+            <small>${voterHistory.selectedThisTrackCount}× dit nummer · ${otherCount}× de ander</small>
+          </header>
+          <ul>${choices}</ul>
+        </section>`;
+    }).join("");
+
+    return `
+      <div class="ranking-history-hero">
+        <img src="${escapeHtml(history.track.cover)}" alt="" width="104" height="104" />
+        <div>
+          <p class="eyebrow">Keuzegeschiedenis · plek ${rankedTrack.rank}</p>
+          <h2 id="ranking-history-title">${escapeHtml(history.track.title)}</h2>
+          <p>${escapeHtml(history.track.artist)}</p>
+          <small>Ingebracht door ${escapeHtml(owner.name)}</small>
+        </div>
+      </div>
+      <div class="ranking-history-summary">
+        <p><strong>${history.selectedThisTrackCount}</strong><span>van ${history.comparisonCount} keer gekozen</span></p>
+        <p><strong>${selectedPercentage}%</strong><span>duels gewonnen</span></p>
+        <p><strong>${Math.round(rankedTrack.top50Probability * 100)}%</strong><span>kans op top 50</span></p>
+      </div>
+      <p class="ranking-history-context">Omdat ${escapeHtml(owner.name)} dit nummer inzond, stemden de andere vier deelnemers er ieder drie keer over. De eindplek gebruikt niet alleen het aantal keuzes, maar ook de geschatte sterkte van de tegenstanders en de onzekerheid in het Bradley–Terry-model.</p>
+      <div class="ranking-history-section-heading">
+        <h3>Alle vergelijkingen</h3>
+        <span>${history.comparisonCount} keuzes door ${history.voters.length} deelnemers</span>
+      </div>
+      <div class="ranking-history-voters">${voterMarkup}</div>`;
+  }
+
+  async function openHistory(trackId: string) {
+    const rankedTrack = rankingById.get(trackId);
+    if (!rankedTrack) return;
+    activeHistoryTrackId = trackId;
+    historyContent.innerHTML = `
+      <div class="ranking-history-loading">
+        <span class="search-loader" aria-hidden="true"></span>
+        <h2 id="ranking-history-title">Keuzes laden…</h2>
+        <p>${escapeHtml(rankedTrack.title)}</p>
+      </div>`;
+    if (!historyDialog.open) historyDialog.showModal();
+
+    const cached = historyCache.get(trackId);
+    if (cached) {
+      historyContent.innerHTML = historyMarkup(cached, rankedTrack);
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/ranking/${encodeURIComponent(trackId)}`, { headers: { Accept: "application/json" } });
+      const payload = await response.json() as TrackHistoryPayload & { error?: string };
+      if (!response.ok || !payload.history) throw new Error(payload.error ?? "De keuzes konden niet worden geladen.");
+      historyCache.set(trackId, payload.history);
+      if (!historyDialog.open || activeHistoryTrackId !== trackId) return;
+      historyContent.innerHTML = historyMarkup(payload.history, rankedTrack);
+    } catch (error) {
+      if (!historyDialog.open || activeHistoryTrackId !== trackId) return;
+      historyContent.innerHTML = `
+        <div class="ranking-history-error">
+          <p class="eyebrow">Niet beschikbaar</p>
+          <h2 id="ranking-history-title">De keuzes konden niet worden geladen.</h2>
+          <p>${escapeHtml(error instanceof Error ? error.message : "Probeer het later opnieuw.")}</p>
+          <button class="outlined-action" type="button" data-retry-history="${escapeHtml(trackId)}">Opnieuw proberen</button>
+        </div>`;
+    }
+  }
+
+  list.addEventListener("click", (event) => {
+    const button = (event.target as Element).closest<HTMLButtonElement>("[data-history-track-id]");
+    if (button?.dataset.historyTrackId) void openHistory(button.dataset.historyTrackId);
+  });
+
+  historyContent.addEventListener("click", (event) => {
+    const button = (event.target as Element).closest<HTMLButtonElement>("[data-retry-history]");
+    if (button?.dataset.retryHistory) void openHistory(button.dataset.retryHistory);
+  });
 
   function render(payload: RankingPayload) {
     count.textContent = String(payload.status.completedVoterCount);
@@ -122,6 +267,8 @@ import { members } from "../data/tracks";
     gate.hidden = true;
     content.hidden = false;
     copy.textContent = "Berekend uit alle 600 keuzes; de kans houdt ook rekening met onzekerheid rond de grens.";
+    rankingById.clear();
+    payload.ranking.forEach((track) => rankingById.set(track.id, track));
     list.innerHTML = payload.ranking.map(rowMarkup).join("");
   }
 

@@ -1852,15 +1852,15 @@ h1 {
 .ranking-explainer p + p { margin-top: 12px; }
 
 .ranking-columns,
-.ranking-row {
+.ranking-row-button {
   display: grid;
-  grid-template-columns: 74px 72px minmax(260px, 1fr) 235px 70px;
+  grid-template-columns: 74px 72px minmax(260px, 1fr) 235px 88px;
   align-items: center;
   gap: 0;
 }
 
 .ranking-columns {
-  grid-template-columns: 146px minmax(260px, 1fr) 235px 70px;
+  grid-template-columns: 146px minmax(260px, 1fr) 235px 88px;
   padding: 12px 0 9px;
   border-bottom: 2px solid var(--ink);
   color: var(--oxblood);
@@ -1886,8 +1886,27 @@ h1 {
 }
 
 .ranking-row {
-  min-height: 68px;
   border-bottom: 1px solid var(--rule);
+}
+
+.ranking-row-button {
+  width: 100%;
+  min-height: 68px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.ranking-row-button:hover {
+  background: rgba(143, 16, 27, 0.055);
+}
+
+.ranking-row-button:focus-visible {
+  outline-color: var(--oxblood);
+  outline-offset: -3px;
 }
 
 .rank-number {
@@ -1951,9 +1970,22 @@ h1 {
 }
 
 .rank-score {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   justify-self: end;
   font-family: var(--display);
   font-size: 28px;
+}
+
+.rank-score i {
+  font-size: 17px;
+  opacity: 0.45;
+}
+
+.ranking-row-button:hover .rank-score i,
+.ranking-row-button:focus-visible .rank-score i {
+  opacity: 1;
 }
 
 .ranking-row.outside {
@@ -1987,6 +2019,328 @@ h1 {
 .cutoff-marker small {
   color: var(--ink);
   font-size: 16px;
+}
+
+.ranking-history-dialog {
+  position: relative;
+  width: min(980px, calc(100% - 40px));
+  height: min(850px, calc(100dvh - 40px));
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  overflow: hidden;
+  border: 2px solid var(--ink);
+  border-radius: 0;
+  background-color: var(--paper);
+  background-image: url("/paper-texture.webp");
+  color: var(--ink);
+}
+
+.ranking-history-dialog[open] {
+  display: grid;
+}
+
+.ranking-history-dialog::backdrop {
+  background: rgba(16, 17, 18, 0.62);
+}
+
+.ranking-history-close {
+  position: absolute;
+  z-index: 3;
+  top: 20px;
+  right: 20px;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--oxblood);
+  background-color: var(--paper);
+  background-image: url("/paper-texture.webp");
+  color: var(--oxblood);
+  cursor: pointer;
+  font-size: 22px;
+}
+
+.ranking-history-close:hover {
+  color: var(--paper-soft);
+  background: var(--oxblood);
+}
+
+#ranking-history-content {
+  min-height: 0;
+  padding: 38px;
+  overflow-y: auto;
+  scrollbar-color: var(--oxblood) transparent;
+}
+
+.ranking-history-loading,
+.ranking-history-error {
+  display: grid;
+  min-height: 360px;
+  place-content: center;
+  justify-items: center;
+  text-align: center;
+}
+
+.ranking-history-loading h2,
+.ranking-history-error h2 {
+  margin: 18px 0 0;
+  font-family: var(--display);
+  font-size: 42px;
+  line-height: 1.08;
+}
+
+.ranking-history-loading p,
+.ranking-history-error > p:not(.eyebrow) {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.ranking-history-error .outlined-action {
+  margin-top: 24px;
+}
+
+.ranking-history-hero {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  align-items: center;
+  gap: 22px;
+  padding-right: 58px;
+}
+
+.ranking-history-hero > img {
+  display: block;
+  width: 104px;
+  height: 104px;
+  object-fit: cover;
+}
+
+.ranking-history-hero .eyebrow {
+  margin: 0 0 5px;
+}
+
+.ranking-history-hero h2 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: clamp(38px, 5vw, 56px);
+  font-weight: 600;
+  line-height: 1.04;
+}
+
+.ranking-history-hero p:not(.eyebrow) {
+  margin: 4px 0 0;
+  font-size: 23px;
+}
+
+.ranking-history-hero small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.ranking-history-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 28px;
+  border-top: 2px solid var(--ink);
+  border-bottom: 1px solid var(--rule);
+}
+
+.ranking-history-summary p {
+  display: flex;
+  min-height: 90px;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+  padding: 16px 18px;
+}
+
+.ranking-history-summary p + p {
+  border-left: 1px solid var(--rule);
+}
+
+.ranking-history-summary strong {
+  color: var(--oxblood);
+  font-family: var(--display);
+  font-size: 42px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.ranking-history-summary span {
+  max-width: 110px;
+  font-size: 16px;
+  line-height: 1.08;
+}
+
+.ranking-history-context {
+  max-width: 830px;
+  margin: 18px 0 30px;
+  color: var(--muted);
+  font-size: 16px;
+}
+
+.ranking-history-section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 10px;
+}
+
+.ranking-history-section-heading h3 {
+  margin: 0;
+  color: var(--oxblood);
+  font-family: var(--display);
+  font-size: 23px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.ranking-history-section-heading span {
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.ranking-history-voters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 2px solid var(--ink);
+  border-left: 1px solid var(--rule);
+}
+
+.ranking-history-voter {
+  min-width: 0;
+  border-right: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+
+.ranking-history-voter > header {
+  display: flex;
+  min-height: 50px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.ranking-history-voter > header > span {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.ranking-history-voter .member-dot {
+  width: 16px;
+  height: 16px;
+}
+
+.ranking-history-voter > header strong {
+  font-size: 19px;
+}
+
+.ranking-history-voter > header small {
+  color: var(--muted);
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.ranking-history-voter ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ranking-history-choice {
+  display: grid;
+  min-height: 76px;
+  grid-template-columns: 115px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+}
+
+.ranking-history-choice + .ranking-history-choice {
+  border-top: 1px solid rgba(16, 17, 18, 0.28);
+}
+
+.ranking-history-outcome {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--oxblood);
+}
+
+.ranking-history-choice.picked-current .ranking-history-outcome {
+  color: var(--green);
+}
+
+.ranking-history-outcome > i {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 14px;
+}
+
+.ranking-history-outcome span,
+.ranking-history-opponent > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.ranking-history-outcome strong {
+  font-family: var(--display);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.05;
+  text-transform: uppercase;
+}
+
+.ranking-history-outcome small,
+.ranking-history-opponent small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ranking-history-opponent {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.ranking-history-opponent img {
+  display: block;
+  width: 52px;
+  height: 52px;
+  object-fit: cover;
+}
+
+.ranking-history-opponent strong,
+.ranking-history-opponent > span > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ranking-history-opponent strong {
+  font-family: var(--display);
+  font-size: 18px;
+  line-height: 1.15;
+}
+
+.ranking-history-opponent > span > span {
+  font-size: 14px;
 }
 
 /* De cd's */
@@ -2423,12 +2777,12 @@ h1 {
   }
 
   .ranking-columns,
-  .ranking-row {
-    grid-template-columns: 62px 62px minmax(180px, 1fr) 150px 55px;
+  .ranking-row-button {
+    grid-template-columns: 62px 62px minmax(180px, 1fr) 150px 70px;
   }
 
   .ranking-columns {
-    grid-template-columns: 124px minmax(180px, 1fr) 150px 55px;
+    grid-template-columns: 124px minmax(180px, 1fr) 150px 70px;
   }
 
   .rank-track strong {
@@ -3354,7 +3708,7 @@ h1 {
     border-top: 2px solid var(--ink);
   }
 
-  .ranking-row {
+  .ranking-row-button {
     grid-template-columns: 53px 62px minmax(0, 1fr) 45px;
     min-height: 84px;
   }
@@ -3415,6 +3769,104 @@ h1 {
     grid-column: 4;
     grid-row: 1;
     font-size: 28px;
+  }
+
+  .rank-score i {
+    display: none;
+  }
+
+  .ranking-history-dialog {
+    width: calc(100% - 20px);
+    height: calc(100dvh - 20px);
+  }
+
+  .ranking-history-close {
+    top: 12px;
+    right: 12px;
+    width: 42px;
+    height: 42px;
+  }
+
+  #ranking-history-content {
+    padding: 22px 18px 26px;
+  }
+
+  .ranking-history-hero {
+    grid-template-columns: 78px minmax(0, 1fr);
+    gap: 14px;
+    padding-right: 40px;
+  }
+
+  .ranking-history-hero > img {
+    width: 78px;
+    height: 78px;
+  }
+
+  .ranking-history-hero .eyebrow {
+    font-size: 15px;
+  }
+
+  .ranking-history-hero h2 {
+    font-size: 32px;
+  }
+
+  .ranking-history-hero p:not(.eyebrow) {
+    font-size: 19px;
+  }
+
+  .ranking-history-summary {
+    grid-template-columns: 1fr;
+    margin-top: 20px;
+  }
+
+  .ranking-history-summary p {
+    min-height: 58px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 9px 10px;
+  }
+
+  .ranking-history-summary p + p {
+    border-top: 1px solid var(--rule);
+    border-left: 0;
+  }
+
+  .ranking-history-summary strong {
+    font-size: 32px;
+  }
+
+  .ranking-history-summary span {
+    max-width: none;
+    text-align: right;
+  }
+
+  .ranking-history-context {
+    margin: 15px 0 24px;
+    font-size: 15px;
+  }
+
+  .ranking-history-section-heading {
+    display: block;
+  }
+
+  .ranking-history-section-heading span {
+    display: block;
+    margin-top: 2px;
+  }
+
+  .ranking-history-voters {
+    grid-template-columns: 1fr;
+  }
+
+  .ranking-history-choice {
+    grid-template-columns: 108px minmax(0, 1fr);
+    gap: 8px;
+    padding: 9px;
+  }
+
+  .ranking-history-voter > header {
+    gap: 8px;
+    padding: 9px;
   }
 
   .cutoff-marker {

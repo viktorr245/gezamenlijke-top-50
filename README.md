@@ -34,7 +34,9 @@ Het schema is vooraf en deterministisch opgebouwd. Per deelnemer komt ieder van 
 
 ### 3. Ranglijst en cd-indeling
 
-Na in totaal 600 keuzes en vijf definitieve bevestigingen berekent de server de volledige ranglijst. De vijftig geselecteerde nummers staan boven **De streep**. Daarna:
+Na in totaal 600 keuzes en vijf definitieve bevestigingen berekent de server de volledige ranglijst. De vijftig geselecteerde nummers staan boven **De streep**. Klik op een nummer om alle twaalf vergelijkingen te bekijken, gegroepeerd per deelnemer. Je ziet steeds de tegenstander en welk nummer is gekozen. De inzender zelf ontbreekt daar, omdat niemand op eigen nummers stemt.
+
+Daarna:
 
 1. leest de server met FFprobe de werkelijke lengte van de originele audiobestanden;
 2. verdeelt de website de top 50 automatisch over drie cd’s, steeds met het langste resterende nummer op de op dat moment kortste cd;
@@ -208,6 +210,7 @@ Een nieuwe set van vijf definitieve inzendingen krijgt automatisch een nieuwe st
 | `GET/PUT/POST /api/submissions/:memberId` | concept laden, concept bewaren, definitief maken |
 | `GET/POST/PUT/DELETE /api/voting/:memberId` | huidige vergelijking laden, keuze opslaan, stemmen definitief maken of laatste keuze terugnemen |
 | `GET /api/ranking` | definitieve batchranglijst zodra iedereen klaar is |
+| `GET /api/ranking/:trackId` | alle vergelijkingen en keuzes voor één nummer uit de definitieve ranglijst |
 | `GET/PUT/POST /api/disc-layout` | indeling laden, automatisch bewaren, definitief maken |
 | `GET/POST /api/burn-packages` | voortgang laden of pakketopbouw opnieuw starten |
 | `GET /api/burn-packages/:packageId` | één cd of alle cd-pakketten downloaden |
@@ -235,7 +238,7 @@ De tests controleren onder meer:
 - ondertekende sessies en het blokkeren van toegang tot een andere deelnemer;
 - de 120 voortgangsmarkeringen, stemmen, terugnemen en expliciet definitief maken;
 - zoeken, audioverplichting en het ontbreken van een betekenisloze inzendvolgorde;
-- alle honderd ranglijstregels en de grens na nummer 50;
+- alle honderd ranglijstregels, de grens na nummer 50 en de keuzegeschiedenis per nummer;
 - automatische cd-verdeling, toegankelijke verplaatsing en definitief maken;
 - geldige streaming-ZIP’s met Unicode-bestandsnamen en de brandpakketdownloads;
 - het ontbreken van document-scroll en horizontale overflow op de geteste schermgroottes.

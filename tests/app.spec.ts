@@ -7,6 +7,7 @@ import { authenticatedMember, requireMember, sessionCookie, verifyPin } from "..
 import { finalizeDiscLayout, getDiscLayout, saveDiscLayout } from "../src/server/disc-layout-storage";
 import { startPathForPhase } from "../src/server/group-state";
 import { listPinnedITunesTracks, pinITunesTrack, searchITunes } from "../src/server/itunes-cache";
+import { buildTrackHistory } from "../src/server/ranking-history";
 import { calculateFinalRanking, calculateRanking, FINAL_RANKING_SAMPLES } from "../src/server/ranking";
 import { finalizeSubmission, getSubmission, listSubmissions, saveDraftSubmission, type SubmissionIndex } from "../src/server/submission-storage";
 import { buildComparisonSchedules, campaignIdFor, castVote, finalizeVoting, listVotes, loadVotingState, undoLastVote, type VoteChoice } from "../src/server/vote-storage";
@@ -329,6 +330,28 @@ test("de batchranglijst is deterministisch en onafhankelijk van invoervolgorde",
   const final = calculateFinalRanking(tracks, choices);
   expect(calculateFinalRanking([...tracks].reverse(), [...choices].reverse())).toBe(final);
   expect(final.filter((track) => track.selected)).toHaveLength(50);
+});
+
+test("de keuzegeschiedenis bevat alle twaalf vergelijkingen in deelnemersvolgorde", async ({}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  const submissions = completeSubmissions();
+  const tracks = members.flatMap((member) => submissions[member.id].tracks);
+  const choices: VoteChoice[] = Object.values(buildComparisonSchedules(submissions)).flat().map((comparison, index) => ({
+    ...comparison,
+    winnerId: comparison.leftId,
+    loserId: comparison.rightId,
+    chosenAt: new Date(Date.UTC(2026, 7, 3, 0, 0, index)).toISOString(),
+  }));
+  const track = submissions.viktor.tracks[0];
+  const history = buildTrackHistory(tracks, choices, track.id);
+
+  expect(history).toBeDefined();
+  expect(history?.comparisonCount).toBe(12);
+  expect(history?.selectedThisTrackCount).toBe(6);
+  expect(history?.selectedOtherTrackCount).toBe(6);
+  expect(history?.voters.map((voter) => voter.voterId)).toEqual(["daniel", "keano", "sander", "jurjan"]);
+  expect(history?.voters.every((voter) => voter.comparisons.length === 3)).toBe(true);
+  expect(buildTrackHistory(tracks, choices, "bestaat-niet")).toBeUndefined();
 });
 
 test("stemmen worden in de vaste volgorde bewaard en kunnen één stap terug", async ({}, testInfo) => {
@@ -1117,6 +1140,24 @@ test("de definitieve ranglijst toont alle 100 nummers en de grens", async ({ pag
   }));
   const status = groupStatus({ votingComplete: true, completedVoterCount: 5, finalizedCount: 5, phase: "ranglijst", members: groupStatus().members.map((member) => ({ ...member, votingDone: true, voteCount: 120 })) });
   await page.route("**/api/ranking", (route) => route.fulfill({ json: { status, ranking } }));
+  const historyTrack = ranking[0];
+  const historyVoters = members.filter((member) => member.id !== historyTrack.owner).map((member, voterIndex) => ({
+    voterId: member.id,
+    selectedThisTrackCount: 2,
+    comparisons: Array.from({ length: 3 }, (_, comparisonIndex) => ({
+      id: `history-${member.id}-${comparisonIndex}`,
+      opponent: ranking[1 + voterIndex * 3 + comparisonIndex],
+      selectedThisTrack: comparisonIndex < 2,
+      chosenAt: new Date(Date.UTC(2026, 7, 3, voterIndex, comparisonIndex)).toISOString(),
+    })),
+  }));
+  await page.route(`**/api/ranking/${historyTrack.id}`, (route) => route.fulfill({ json: { history: {
+    track: historyTrack,
+    comparisonCount: 12,
+    selectedThisTrackCount: 8,
+    selectedOtherTrackCount: 4,
+    voters: historyVoters,
+  } } }));
   await page.goto("/ranglijst");
   await expect(page.locator(".ranking-row")).toHaveCount(100);
   await expect(page.locator(".cutoff-marker")).toHaveCount(1);
@@ -1133,6 +1174,16 @@ test("de definitieve ranglijst toont alle 100 nummers en de grens", async ({ pag
     await page.locator(".page").evaluate((element) => element.scrollTop = 800);
     await expect.poll(async () => Math.round((await page.locator(".ranking-columns").boundingBox())?.y ?? -1)).toBe(0);
   }
+  await page.locator(".ranking-row-button").first().click();
+  const historyDialog = page.getByRole("dialog", { name: historyTrack.title });
+  await expect(historyDialog).toBeVisible();
+  await expect(historyDialog.locator(".ranking-history-choice")).toHaveCount(12);
+  await expect(historyDialog.locator(".ranking-history-voter")).toHaveCount(4);
+  await expect(historyDialog.locator(".ranking-history-choice.picked-current")).toHaveCount(8);
+  await expect(historyDialog).toContainText("van 12 keer gekozen");
+  await expect(historyDialog).toContainText("Bradley–Terry-model");
+  await historyDialog.getByRole("button", { name: "Sluiten" }).click();
+  await expect(historyDialog).toBeHidden();
 });
 
 test("de cd-pagina verdeelt automatisch, ordent toegankelijk en laat alleen Viktor afronden", async ({ page, isMobile }) => {
