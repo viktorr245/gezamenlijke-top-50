@@ -7,6 +7,7 @@ export type PlaybackNormalizer = {
 const VOLUME_STORAGE_KEY = "gezamenlijke-top-50-volume";
 const VOLUME_EVENT = "gezamenlijke-top-50-volume-change";
 const DEFAULT_VOLUME = 85;
+const START_FADE_SECONDS = 0.06;
 
 export function getGlobalPlaybackVolume(): number {
   const stored = Number(localStorage.getItem(VOLUME_STORAGE_KEY));
@@ -21,6 +22,7 @@ export function setGlobalPlaybackVolume(value: number) {
 
 export function createPlaybackNormalizer(audio: HTMLAudioElement): PlaybackNormalizer {
   let context: AudioContext | undefined;
+  let startGain: GainNode | undefined;
   let outputGain: GainNode | undefined;
   let initialized = false;
   let unavailable = false;
@@ -54,6 +56,7 @@ export function createPlaybackNormalizer(audio: HTMLAudioElement): PlaybackNorma
         const preGain = context.createGain();
         const leveler = context.createDynamicsCompressor();
         const limiter = context.createDynamicsCompressor();
+        startGain = context.createGain();
         outputGain = context.createGain();
 
         // Extra headroom gaat een zachte compressor in. Daardoor worden grote
@@ -69,17 +72,25 @@ export function createPlaybackNormalizer(audio: HTMLAudioElement): PlaybackNorma
         limiter.ratio.value = 20;
         limiter.attack.value = 0.003;
         limiter.release.value = 0.1;
+        startGain.gain.value = 0;
         outputGain.gain.value = getGlobalPlaybackVolume() / 100;
 
-        source.connect(preGain).connect(leveler).connect(limiter).connect(outputGain).connect(context.destination);
+        source.connect(preGain).connect(leveler).connect(limiter).connect(startGain).connect(outputGain).connect(context.destination);
         audio.volume = 1;
         initialized = true;
       }
       if (context?.state === "suspended") await context.resume();
+      if (context && startGain) {
+        const now = context.currentTime;
+        startGain.gain.cancelScheduledValues(now);
+        startGain.gain.setValueAtTime(0, now);
+        startGain.gain.linearRampToValueAtTime(1, now + START_FADE_SECONDS);
+      }
     } catch {
       unavailable = true;
       await context?.close().catch(() => undefined);
       context = undefined;
+      startGain = undefined;
       outputGain = undefined;
       applyVolume(getGlobalPlaybackVolume());
     }
