@@ -84,6 +84,8 @@ De server bewaart vervolgens:
 - het oorspronkelijke uploadbestand of de beste door YouTube aangeboden audiobron;
 - een WebM/Opus-versie van 196 kbit/s voor afspelen in de browser.
 
+Tijdens het afspelen maakt de browser grote volumeverschillen automatisch kleiner en begrenst hij harde pieken. Dit gebeurt uitsluitend in de afspeelketen: de originele audiobron, de WebM/Opus-versie en de WAV-bestanden voor de cd’s worden hiervoor niet aangepast. De globale regelaar **Geluid** staat op iedere pagina in de vaste navigatie en wordt voor die browser onthouden. Ook iTunes-previews lopen ongewijzigd via de eigen server, zodat dezelfde afspeelketen en volumeregelaar erop kunnen worden toegepast.
+
 De cd-pakketten worden altijd vanuit de eerste, bewaarde bron gemaakt. YouTube-audio doorloopt daardoor dezelfde FFprobe-controle, 80-minutenberekening en WAV-conversie als een handmatig uploadbestand.
 
 Verwijder je een nummer uit een conceptinzending, dan verwijdert de server beide audiobestanden direct mee. Audio van een definitieve inzending kan niet via de website worden verwijderd.

@@ -125,6 +125,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
 <script>
   import { formatDuration, type Track } from "../data/tracks";
   import { getActiveMember } from "../scripts/member-session";
+  import { createPlaybackNormalizer } from "../scripts/playback-normalization";
 
   type AudioRecord = {
     trackId: string;
@@ -188,6 +189,8 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   const playbackPositions = new Map<string, number>();
   const previewAudio = new Audio();
   const submissionAudio = new Audio();
+  const previewNormalizer = createPlaybackNormalizer(previewAudio);
+  const submissionNormalizer = createPlaybackNormalizer(submissionAudio);
   let searchTimer: number | undefined;
   let searchVersion = 0;
   let activePreviewId: string | undefined;
@@ -605,8 +608,15 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     activePreviewId = undefined;
   }
 
+  function previewPlaybackUrl(track: Track): string | undefined {
+    return track.previewUrl && track.source === "itunes" && track.sourceId && /^\d+$/.test(track.sourceId)
+      ? `/api/itunes/preview/${encodeURIComponent(track.sourceId)}`
+      : track.previewUrl;
+  }
+
   async function togglePreview(track: Track) {
-    if (!track.previewUrl) return;
+    const source = previewPlaybackUrl(track);
+    if (!source) return;
     if (activePreviewId === track.id && !previewAudio.paused) {
       stopPreview(false);
       return;
@@ -616,9 +626,8 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     stopSubmissionPlayback();
     const generation = previewGeneration;
     activePreviewId = track.id;
-    previewAudio.src = track.previewUrl;
+    previewAudio.src = source;
     const expectedSource = previewAudio.src;
-    previewAudio.volume = 0.85;
     previewAudio.addEventListener("ended", () => {
       if (generation !== previewGeneration || activePreviewId !== track.id || previewAudio.src !== expectedSource) return;
       stopPreview();
@@ -629,6 +638,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
       setMessage("De preview van dit nummer kan niet worden afgespeeld.", true);
     }, { once: true });
     try {
+      await previewNormalizer.activate();
       await previewAudio.play();
       if (generation !== previewGeneration || activePreviewId !== track.id || previewAudio.src !== expectedSource) return;
       setPreviewButton(track.id, true);
@@ -702,7 +712,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
     const generation = submissionPlaybackGeneration;
     activeSubmissionId = trackId;
     const record = audioRecords.get(trackId);
-    const source = record?.url ?? track.previewUrl;
+    const source = record?.url ?? previewPlaybackUrl(track);
     try {
       if (!source) throw new Error("Voeg eerst het audiobestand toe.");
 
@@ -727,6 +737,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
         stopSubmissionPlayback();
         setMessage("Dit audiobestand kan niet worden afgespeeld.", true);
       }, { once: true });
+      await submissionNormalizer.activate();
       await submissionAudio.play();
       if (generation !== submissionPlaybackGeneration || activeSubmissionId !== trackId || submissionAudio.src !== expectedSource) return;
       setSubmissionPlaying(trackId, true);

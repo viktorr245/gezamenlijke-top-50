@@ -6,7 +6,7 @@ import { members, type MemberId, type Track } from "../src/data/tracks";
 import { authenticatedMember, requireMember, sessionCookie, verifyPin } from "../src/server/auth";
 import { finalizeDiscLayout, getDiscLayout, saveDiscLayout } from "../src/server/disc-layout-storage";
 import { startPathForPhase } from "../src/server/group-state";
-import { listPinnedITunesTracks, pinITunesTrack, searchITunes } from "../src/server/itunes-cache";
+import { getITunesPreviewUrl, listPinnedITunesTracks, pinITunesTrack, searchITunes } from "../src/server/itunes-cache";
 import { buildTrackHistory } from "../src/server/ranking-history";
 import { calculateFinalRanking, calculateRanking, FINAL_RANKING_SAMPLES } from "../src/server/ranking";
 import { finalizeSubmission, getSubmission, listSubmissions, saveDraftSubmission, type SubmissionIndex } from "../src/server/submission-storage";
@@ -545,7 +545,7 @@ test("iTunes-zoekresultaten worden gecachet en volledig vastgezet", async ({}, t
       collectionName: "Testalbum",
       trackTimeMillis: 201000,
       artworkUrl100: "https://example.test/100x100bb.jpg",
-      previewUrl: "https://example.test/preview.m4a",
+      previewUrl: "https://audio-ssl.itunes.apple.com/preview.m4a",
       releaseDate: "2025-01-01T00:00:00Z",
     }] });
   };
@@ -553,6 +553,7 @@ test("iTunes-zoekresultaten worden gecachet en volledig vastgezet", async ({}, t
     expect((await searchITunes("testnummer", fetcher, cachePath)).cacheStatus).toBe("MISS");
     expect((await searchITunes("  TESTNUMMER ", fetcher, cachePath)).cacheStatus).toBe("HIT");
     expect(calls).toBe(1);
+    expect(await getITunesPreviewUrl("12345", cachePath)).toBe("https://audio-ssl.itunes.apple.com/preview.m4a");
     await pinITunesTrack("12345", cachePath);
     expect(await listPinnedITunesTracks(cachePath)).toHaveLength(1);
     const stored = JSON.parse(await readFile(cachePath, "utf8"));
@@ -684,6 +685,13 @@ test("de navigatie en deelnemerkeuze werken op ieder scherm", async ({ page, isM
     await nav.getByRole("link", { name }).click();
     await expect(page).toHaveURL(new RegExp(`${path}$`));
   }
+  const volume = page.locator(isMobile ? ".mobile-volume" : ".global-volume--sidebar");
+  if (isMobile) await volume.locator("summary").click();
+  await volume.getByRole("slider", { name: "Globaal volume", exact: true }).fill("37");
+  await expect(volume.locator("[data-volume-output]")).toHaveText("37%");
+  await page.reload();
+  if (isMobile) await page.locator(".mobile-volume summary").click();
+  await expect(page.locator(isMobile ? ".mobile-volume" : ".global-volume--sidebar").getByRole("slider", { name: "Globaal volume", exact: true })).toHaveValue("37");
   if (isMobile) {
     await page.locator("[data-member-select]").selectOption("daniel");
   } else {
@@ -840,10 +848,14 @@ test("Mijn 20 zoekt, bewaart centraal en maakt audio duidelijk verplicht", async
   let audioUploads = 0;
   let youtubeImports = 0;
   let receivedYouTubeUrl = "";
-  await page.route("https://example.test/preview.m4a", (route) => route.fulfill({
+  let previewRequests = 0;
+  await page.route("**/api/itunes/preview/100000", (route) => {
+    previewRequests += 1;
+    return route.fulfill({
     body: createWav(),
     contentType: "audio/wav",
-  }));
+    });
+  });
   await page.route("**/api/submissions/viktor", async (route) => {
     if (route.request().method() === "GET") return route.fulfill({ json: { submission: null } });
     const body = route.request().postDataJSON() as { tracks: Track[] };
@@ -884,6 +896,7 @@ test("Mijn 20 zoekt, bewaart centraal en maakt audio duidelijk verplicht", async
   const previewButton = page.locator(".search-preview");
   await previewButton.click();
   await expect(previewButton).toHaveAttribute("aria-pressed", "true");
+  expect(previewRequests).toBeGreaterThan(0);
   await previewButton.click();
   await expect(page.locator("#track-search-results")).toBeVisible();
   await expect(previewButton).toHaveAttribute("aria-pressed", "false");
@@ -1450,6 +1463,7 @@ test("lange paginatitels blijven op een scherm van 320 pixels volledig zichtbaar
     });
     expect(bounds.left).toBeGreaterThanOrEqual(0);
     expect(bounds.right).toBeLessThanOrEqual(bounds.viewport);
+    expect(await page.evaluate(() => document.body.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   }
 });
 

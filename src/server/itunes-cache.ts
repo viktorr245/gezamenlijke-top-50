@@ -280,6 +280,23 @@ export async function pinITunesTrack(sourceId: string, cachePath = DEFAULT_CACHE
   });
 }
 
+export async function getITunesPreviewUrl(sourceId: string, cachePath = DEFAULT_CACHE_PATH): Promise<string> {
+  if (!/^\d+$/.test(sourceId)) throw new Error("Ongeldig iTunes-nummer.");
+  const previewUrl = (await readCache(cachePath)).records[sourceId]?.track.previewUrl;
+  if (!previewUrl) throw new Error("Voor dit nummer is geen iTunes-preview beschikbaar.");
+  const url = new URL(previewUrl);
+  const host = url.hostname.toLowerCase();
+  if (url.protocol !== "https:" || !(
+    host === "itunes.apple.com"
+    || host.endsWith(".itunes.apple.com")
+    || host === "mzstatic.com"
+    || host.endsWith(".mzstatic.com")
+  )) {
+    throw new Error("De iTunes-preview heeft geen vertrouwde audiobron.");
+  }
+  return url.toString();
+}
+
 export async function listPinnedITunesTracks(cachePath = DEFAULT_CACHE_PATH): Promise<Track[]> {
   const cache = await readCache(cachePath);
   return Object.values(cache.records)

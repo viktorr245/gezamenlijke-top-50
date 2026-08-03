@@ -66,6 +66,11 @@ const signedInMember = signedInMemberId ? getMember(signedInMemberId) : undefine
         ))}
       </ul>
 
+      <label class="global-volume global-volume--sidebar">
+        <span><i class="ph ph-speaker-high" data-volume-icon aria-hidden="true"></i> Geluid <output data-volume-output>85%</output></span>
+        <input type="range" min="0" max="100" step="1" value="85" data-global-volume aria-label="Globaal volume" />
+      </label>
+
       {authEnabled && signedInMember && (
         <button class="text-action logout-action" type="button" data-logout>Afmelden als {signedInMember.name}</button>
       )}
@@ -73,16 +78,25 @@ const signedInMember = signedInMemberId ? getMember(signedInMemberId) : undefine
 
     <header class="mobile-header">
       <a class="brand" href="/">De gezamenlijke 50</a>
-      {authEnabled && signedInMember ? (
-        <button class="mobile-member-name" type="button" data-logout title="Afmelden">{signedInMember.name}</button>
-      ) : (
-        <label class="mobile-member-picker">
-          <span class="sr-only">Jij bent</span>
-          <select data-member-select aria-label="Kies deelnemer">
-            {members.map((member) => <option value={member.id}>{member.name}</option>)}
-          </select>
-        </label>
-      )}
+      <div class="mobile-header-actions">
+        <details class="mobile-volume">
+          <summary aria-label="Globaal volume instellen"><i class="ph ph-speaker-high" data-volume-icon aria-hidden="true"></i></summary>
+          <label class="global-volume">
+            <span>Geluid <output data-volume-output>85%</output></span>
+            <input type="range" min="0" max="100" step="1" value="85" data-global-volume aria-label="Globaal volume" />
+          </label>
+        </details>
+        {authEnabled && signedInMember ? (
+          <button class="mobile-member-name" type="button" data-logout title="Afmelden">{signedInMember.name}</button>
+        ) : (
+          <label class="mobile-member-picker">
+            <span class="sr-only">Jij bent</span>
+            <select data-member-select aria-label="Kies deelnemer">
+              {members.map((member) => <option value={member.id}>{member.name}</option>)}
+            </select>
+          </label>
+        )}
+      </div>
     </header>
 
     <main class:list={["page", `page--${active}`]}>
@@ -120,6 +134,7 @@ const signedInMember = signedInMemberId ? getMember(signedInMemberId) : undefine
 
 <script>
   import { isMemberId } from "../data/tracks";
+  import { getGlobalPlaybackVolume, setGlobalPlaybackVolume } from "../scripts/playback-normalization";
 
   const authEnabled = document.documentElement.dataset.authEnabled === "true";
   const signedInMemberId = document.documentElement.dataset.memberId;
@@ -128,6 +143,23 @@ const signedInMember = signedInMemberId ? getMember(signedInMemberId) : undefine
   const hasStoredIdentity = isMemberId(stored);
   const activeMember = isMemberId(signedInMemberId) ? signedInMemberId : isMemberId(stored) ? stored : "viktor";
   localStorage.setItem(MEMBER_KEY, activeMember);
+
+  function renderVolume(value: number) {
+    document.querySelectorAll<HTMLInputElement>("[data-global-volume]").forEach((input) => input.value = String(value));
+    document.querySelectorAll<HTMLOutputElement>("[data-volume-output]").forEach((output) => output.textContent = `${value}%`);
+    document.querySelectorAll<HTMLElement>("[data-volume-icon]").forEach((icon) => {
+      icon.className = `ph ph-speaker-${value === 0 ? "slash" : value < 50 ? "low" : "high"}`;
+    });
+  }
+
+  renderVolume(getGlobalPlaybackVolume());
+  document.querySelectorAll<HTMLInputElement>("[data-global-volume]").forEach((input) => {
+    input.addEventListener("input", () => {
+      const value = Number(input.value);
+      setGlobalPlaybackVolume(value);
+      renderVolume(value);
+    });
+  });
 
   function selectMember(memberId: string, reload = false) {
     if (!isMemberId(memberId)) return;

@@ -233,6 +233,49 @@ input:disabled {
   text-align: left;
 }
 
+.global-volume {
+  display: block;
+  color: var(--ink);
+}
+
+.global-volume--sidebar {
+  margin-top: auto;
+  padding-top: 28px;
+}
+
+.global-volume > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--oxblood);
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.global-volume > span i {
+  margin-right: auto;
+  font-size: 18px;
+}
+
+.global-volume output {
+  color: var(--muted);
+  font-family: var(--body);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+
+.global-volume input {
+  width: 100%;
+  height: 28px;
+  margin: 4px 0 0;
+  accent-color: var(--oxblood);
+  cursor: pointer;
+}
+
 .identity-dialog {
   width: min(560px, calc(100% - 32px));
   padding: 38px;
@@ -3631,6 +3674,48 @@ h1 {
 
   .mobile-header .brand {
     font-size: 16px;
+  }
+
+  .mobile-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+
+  .mobile-volume {
+    position: relative;
+  }
+
+  .mobile-volume summary {
+    display: grid;
+    width: 44px;
+    height: 44px;
+    place-items: center;
+    color: var(--oxblood);
+    cursor: pointer;
+    font-size: 21px;
+    list-style: none;
+  }
+
+  .mobile-volume summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .mobile-volume[open] summary {
+    background: rgba(143, 16, 27, 0.08);
+  }
+
+  .mobile-volume .global-volume {
+    position: absolute;
+    z-index: 2;
+    top: 47px;
+    right: -6px;
+    width: min(250px, calc(100vw - 24px));
+    padding: 14px 16px 10px;
+    border: 1px solid var(--ink);
+    background-color: var(--paper);
+    background-image: url("/paper-texture.webp");
+    box-shadow: 4px 5px 0 rgba(16, 17, 18, 0.12);
   }
 
   .identity-dialog { padding: 26px 20px; }

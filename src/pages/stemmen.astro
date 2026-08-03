@@ -57,6 +57,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
 <script>
   import { formatDuration, type Track } from "../data/tracks";
   import { getActiveMember } from "../scripts/member-session";
+  import { createPlaybackNormalizer } from "../scripts/playback-normalization";
 
   type VotingPayload = {
     status: {
@@ -80,6 +81,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
   const undoButton = document.querySelector<HTMLButtonElement>("#undo-vote")!;
   const message = document.querySelector<HTMLElement>("#vote-message")!;
   const audio = new Audio();
+  const audioNormalizer = createPlaybackNormalizer(audio);
   const positions = new Map<string, number>();
   let activeCard: HTMLElement | undefined;
   let audioGeneration = 0;
@@ -160,6 +162,7 @@ import ProgressMarks from "../components/ProgressMarks.astro";
       message.textContent = "Dit audiobestand kan niet worden afgespeeld.";
     }, { once: true });
     try {
+      await audioNormalizer.activate();
       await audio.play();
       if (generation !== audioGeneration || activeCard !== card || audio.src !== expectedSource) return;
       setPlaying(card, true);
