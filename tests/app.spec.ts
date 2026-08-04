@@ -1367,6 +1367,85 @@ test("audio van een definitieve inzending kan in de interface niet worden vervan
 });
 
 test("de definitieve ranglijst toont alle 100 nummers en de grens", async ({ page, isMobile }) => {
+  await page.addInitScript(() => {
+    const positions = new WeakMap<HTMLMediaElement, number>();
+    const paused = new WeakMap<HTMLMediaElement, boolean>();
+    Object.defineProperties(HTMLMediaElement.prototype, {
+      currentTime: {
+        configurable: true,
+        get() { return positions.get(this) ?? 0; },
+        set(value: number) {
+          positions.set(this, value);
+          queueMicrotask(() => this.dispatchEvent(new Event("timeupdate")));
+        },
+      },
+      duration: { configurable: true, get() { return 180; } },
+      paused: { configurable: true, get() { return paused.get(this) ?? true; } },
+      readyState: { configurable: true, get() { return HTMLMediaElement.HAVE_METADATA; } },
+      play: {
+        configurable: true,
+        value() {
+          paused.set(this, false);
+          this.dispatchEvent(new Event("play"));
+          this.dispatchEvent(new Event("playing"));
+          return Promise.resolve();
+        },
+      },
+      pause: {
+        configurable: true,
+        value() {
+          paused.set(this, true);
+          this.dispatchEvent(new Event("pause"));
+        },
+      },
+      load: {
+        configurable: true,
+        value() {
+          positions.set(this, 0);
+          queueMicrotask(() => this.dispatchEvent(new Event("loadedmetadata")));
+        },
+      },
+    });
+
+    class FakeAudioParam {
+      value = 0;
+      cancelScheduledValues() { return this; }
+      cancelAndHoldAtTime() { return this; }
+      setValueAtTime(value: number) { this.value = value; return this; }
+      linearRampToValueAtTime(value: number) { this.value = value; return this; }
+    }
+    class FakeAudioNode {
+      gain = new FakeAudioParam();
+      threshold = new FakeAudioParam();
+      knee = new FakeAudioParam();
+      ratio = new FakeAudioParam();
+      attack = new FakeAudioParam();
+      release = new FakeAudioParam();
+      connect<T>(target: T) { return target; }
+    }
+    class FakeAudioContext {
+      state = "running";
+      currentTime = 1;
+      destination = new FakeAudioNode();
+      createMediaElementSource() { return new FakeAudioNode(); }
+      createGain() { return new FakeAudioNode(); }
+      createDynamicsCompressor() { return new FakeAudioNode(); }
+      resume() { return Promise.resolve(); }
+      close() { return Promise.resolve(); }
+    }
+    Object.defineProperty(window, "AudioContext", { configurable: true, value: FakeAudioContext });
+
+    const handlers = new Map<string, (details: Record<string, number>) => void>();
+    Object.defineProperty(navigator, "mediaSession", { configurable: true, value: {
+      metadata: null,
+      playbackState: "none",
+      setActionHandler(action: string, handler: (details: Record<string, number>) => void) { handlers.set(action, handler); },
+      setPositionState() {},
+    } });
+    class FakeMediaMetadata { constructor(init: object) { Object.assign(this, init); } }
+    Object.defineProperty(window, "MediaMetadata", { configurable: true, value: FakeMediaMetadata });
+    Object.defineProperty(window, "__mediaSessionHandlers", { configurable: true, value: handlers });
+  });
   const tracks = members.flatMap((member) => Array.from({ length: 20 }, (_, index) => makeTrack(member.id, index)));
   const ranking = tracks.map((track, index) => ({
     ...track,
@@ -1382,6 +1461,7 @@ test("de definitieve ranglijst toont alle 100 nummers en de grens", async ({ pag
   }));
   const status = groupStatus({ votingComplete: true, completedVoterCount: 5, finalizedCount: 5, phase: "ranglijst", members: groupStatus().members.map((member) => ({ ...member, votingDone: true, voteCount: 120 })) });
   await page.route("**/api/ranking", (route) => route.fulfill({ json: { status, ranking } }));
+  await page.route("**/api/audio/**", (route) => route.fulfill({ body: createWav(), contentType: "audio/wav" }));
   const historyTrack = ranking[0];
   const historyVoters = members.filter((member) => member.id !== historyTrack.owner).map((member, voterIndex) => ({
     voterId: member.id,
@@ -1401,6 +1481,7 @@ test("de definitieve ranglijst toont alle 100 nummers en de grens", async ({ pag
     voters: historyVoters,
   } } }));
   await page.goto("/ranglijst");
+  await expect(page.locator("[data-volume-output]")).toHaveText(["85%", "85%"]);
   await expect(page.locator(".ranking-row")).toHaveCount(100);
   await expect(page.locator(".cutoff-marker")).toHaveCount(1);
   await expect(page.locator(".ranking-columns")).toContainText("Kans top 50");
@@ -1447,6 +1528,41 @@ test("de definitieve ranglijst toont alle 100 nummers en de grens", async ({ pag
   await expect(historyDialog).toBeHidden();
   await expect(guideDialog).toBeVisible();
   await guideDialog.getByRole("button", { name: "Sluiten" }).click();
+
+  await page.getByRole("button", { name: "Speel top 50", exact: true }).click();
+  const player = page.getByRole("region", { name: "Ranglijstspeler" });
+  await expect(player).toBeVisible();
+  await expect(player.locator("[data-player-title]")).toHaveText(ranking[0].title);
+  await expect(player.locator("[data-player-toggle]")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".ranking-row.is-audio-playing")).toHaveAttribute("data-ranking-track-id", ranking[0].id);
+
+  await player.locator("[data-player-seek]").evaluate((element) => {
+    const input = element as HTMLInputElement;
+    input.value = "37";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await expect(player.locator("[data-player-elapsed]")).toHaveText("0:37");
+  await player.locator("[data-player-back]").click();
+  await expect(player.locator("[data-player-elapsed]")).toHaveText("0:27");
+  await page.evaluate(() => {
+    const handlers = (window as typeof window & { __mediaSessionHandlers: Map<string, (details: Record<string, number>) => void> }).__mediaSessionHandlers;
+    handlers.get("nexttrack")?.({});
+  });
+  await expect(player.locator("[data-player-title]")).toHaveText(ranking[1].title);
+  await player.locator("audio").evaluate((element) => element.dispatchEvent(new Event("ended")));
+  await expect(player.locator("[data-player-title]")).toHaveText(ranking[2].title);
+
+  await player.locator("[data-player-expand]").first().click();
+  await expect(player.locator("#ranking-player-drawer")).toBeVisible();
+  await expect(player.locator(".ranking-player-queue > li")).toHaveCount(50);
+  await expect(player.locator(".ranking-player-queue [aria-current='true']")).toContainText(ranking[2].title);
+
+  await player.locator("[data-player-toggle]").click();
+  await expect(player.locator("[data-player-toggle]")).toHaveAttribute("aria-pressed", "false");
+  await page.reload();
+  await expect(player).toBeVisible();
+  await expect(player.locator("[data-player-title]")).toHaveText(ranking[2].title);
+  await expect(player.locator("[data-player-status]")).toHaveText("Klaar om af te spelen");
 });
 
 test("de cd-pagina verdeelt in ranglijstvolgorde en laat alleen Viktor afronden", async ({ page }) => {

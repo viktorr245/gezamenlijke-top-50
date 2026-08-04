@@ -38,6 +38,10 @@ Na in totaal 600 keuzes en vijf definitieve bevestigingen berekent de server de 
 
 Klik op een nummer om alle twaalf vergelijkingen te bekijken, gegroepeerd per deelnemer. Je ziet steeds de tegenstander en welk nummer is gekozen. Het venster rekent met de echte waarden van dat nummer voor hoe vaak het in de top 50 viel, de verwachte plek en de 90%-band, en legt uit waarom het op zijn definitieve plaats staat. De inzender zelf ontbreekt bij de vergelijkingen, omdat niemand op eigen nummers stemt.
 
+Met **Speel top 50** of **Alle 100** verandert de ranglijst in een doorlopende afspeellijst. Het losse afspeelicoon op iedere cover begint vanaf die plek. De vaste speler heeft vorig/volgend, tien seconden terug of vooruit, pauze en een tijdlijn om direct naar een andere positie te gaan. Klap hem open om de hele wachtrij te bekijken en vanaf een ander nummer verder te luisteren. Het huidige nummer en de afspeelpositie worden in deze browser onthouden; na opnieuw openen hervat de speler pas wanneer je zelf op afspelen drukt.
+
+Op ondersteunde telefoons geeft de speler titel, artiest, cover, voortgang en bediening door aan het vergrendelscherm, Bluetooth, CarPlay of Android Auto via de Media Session API. De website blijft automatisch naar het volgende nummer gaan wanneer het scherm is vergrendeld, zolang de browser de afspeelsessie actief houdt. De website verschijnt daarbij niet als zelfstandige CarPlay- of Android Auto-app en volledig afsluiten van de browser of telefoon stopt de muziek.
+
 Daarna:
 
 1. leest de server met FFprobe de werkelijke lengte van de bewaarde audiobronnen;
@@ -258,7 +262,7 @@ De tests controleren onder meer:
 - ondertekende sessies en het blokkeren van toegang tot een andere deelnemer;
 - de 120 voortgangsmarkeringen, stemmen, terugnemen en expliciet definitief maken;
 - zoeken, uploaden of YouTube-audio ophalen, audioverplichting en het ontbreken van een betekenisloze inzendvolgorde;
-- alle honderd ranglijstregels, de grens na nummer 50 en de keuzegeschiedenis per nummer;
+- alle honderd ranglijstregels, de grens na nummer 50, de keuzegeschiedenis en de doorlopende ranglijstspeler met wachtrij, scrubben, Media Session-bediening en hervatten;
 - automatische cd-verdeling in vaste ranglijstvolgorde, doorlopende tracknummering en definitief maken;
 - geldige streaming-ZIP’s met Unicode-bestandsnamen en de brandpakketdownloads;
 - het ontbreken van document-scroll en horizontale overflow op de geteste schermgroottes.

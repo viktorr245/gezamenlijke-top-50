@@ -28,12 +28,21 @@ import { members } from "../data/tracks";
       <div class="ranking-toolbar">
         <div>
           <h2>Alle 100 nummers</h2>
-          <p>Klik op een nummer voor de keuzes en zijn exacte berekening.</p>
+          <p>Speel vanaf iedere plek of klik op de regel voor de exacte berekening.</p>
         </div>
-        <button class="ranking-guide-open" id="ranking-guide-open" type="button">
-          <i class="ph ph-question" aria-hidden="true"></i>
-          Uitleg bij alle cijfers
-        </button>
+        <div class="ranking-toolbar-actions">
+          <button class="ranking-play-action ranking-play-action--primary" type="button" data-play-queue="top50">
+            <i class="ph ph-play" aria-hidden="true"></i>
+            Speel top 50
+          </button>
+          <button class="ranking-play-action" type="button" data-play-queue="all">
+            Alle 100
+          </button>
+          <button class="ranking-guide-open" id="ranking-guide-open" type="button">
+            <i class="ph ph-question" aria-hidden="true"></i>
+            Uitleg bij alle cijfers
+          </button>
+        </div>
       </div>
       <div class="ranking-columns">
         <span>#</span><span>Nummer</span><span>Ingebracht door</span>
@@ -133,10 +142,76 @@ import { members } from "../data/tracks";
       </div>
     </div>
   </dialog>
+
+  <section class="ranking-player" id="ranking-player" aria-label="Ranglijstspeler" hidden>
+    <div class="ranking-player-drawer" id="ranking-player-drawer" hidden>
+      <header class="ranking-player-drawer-heading">
+        <div>
+          <p class="eyebrow">Nu en wachtrij</p>
+          <h2>De ranglijst als afspeellijst.</h2>
+        </div>
+        <button type="button" data-player-collapse aria-label="Speler inklappen">
+          <i class="ph ph-caret-down" aria-hidden="true"></i>
+        </button>
+      </header>
+      <div class="ranking-player-drawer-grid">
+        <div class="ranking-player-feature">
+          <img data-player-cover-large src="" alt="" width="260" height="260" />
+          <p data-player-queue-label>Top 50</p>
+          <h3 data-player-title-large></h3>
+          <span data-player-artist-large></span>
+          <small>De afspeelpositie wordt op dit apparaat onthouden.</small>
+        </div>
+        <div class="ranking-player-queue-wrap">
+          <div>
+            <h3>Wachtrij</h3>
+            <span data-player-queue-count></span>
+          </div>
+          <ol class="ranking-player-queue" id="ranking-player-queue"></ol>
+        </div>
+      </div>
+    </div>
+
+    <div class="ranking-player-timeline">
+      <input type="range" min="0" max="0" step="0.1" value="0" data-player-seek aria-label="Positie in het nummer" />
+    </div>
+    <div class="ranking-player-bar">
+      <button class="ranking-player-current" type="button" data-player-expand aria-expanded="false" aria-controls="ranking-player-drawer">
+        <img data-player-cover src="" alt="" width="62" height="62" />
+        <span>
+          <small data-player-position></small>
+          <strong data-player-title></strong>
+          <span data-player-artist></span>
+        </span>
+      </button>
+
+      <div class="ranking-player-controls" aria-label="Afspeelbediening">
+        <button type="button" data-player-previous aria-label="Vorig nummer"><i class="ph ph-skip-back" aria-hidden="true"></i></button>
+        <button type="button" data-player-back aria-label="10 seconden terug"><i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i><small>10</small></button>
+        <button class="ranking-player-toggle" type="button" data-player-toggle aria-label="Afspelen" aria-pressed="false"><i class="ph ph-play" aria-hidden="true"></i></button>
+        <button type="button" data-player-forward aria-label="10 seconden vooruit"><i class="ph ph-arrow-clockwise" aria-hidden="true"></i><small>10</small></button>
+        <button type="button" data-player-next aria-label="Volgend nummer"><i class="ph ph-skip-forward" aria-hidden="true"></i></button>
+      </div>
+
+      <div class="ranking-player-time">
+        <span><output data-player-elapsed>0:00</output><i>/</i><output data-player-duration>0:00</output></span>
+        <small data-player-status>Klaar om af te spelen</small>
+      </div>
+      <button class="ranking-player-expand" type="button" data-player-expand aria-expanded="false" aria-controls="ranking-player-drawer" aria-label="Wachtrij openen">
+        <i class="ph ph-caret-up" aria-hidden="true"></i>
+      </button>
+      <button class="ranking-player-close" type="button" data-player-close aria-label="Speler sluiten">
+        <i class="ph ph-x" aria-hidden="true"></i>
+      </button>
+    </div>
+    <audio id="ranking-audio" preload="auto" playsinline></audio>
+    <p class="sr-only" data-player-announcement aria-live="polite"></p>
+  </section>
 </AppShell>
 
 <script>
   import { getMember, type Track } from "../data/tracks";
+  import { createRankingPlayer } from "../scripts/ranking-player";
 
   type RankedTrack = Track & {
     rank: number;
@@ -190,6 +265,7 @@ import { members } from "../data/tracks";
   const guideExample = document.querySelector<HTMLElement>("#ranking-guide-example")!;
   const historyDialog = document.querySelector<HTMLDialogElement>("#ranking-history-dialog")!;
   const historyContent = document.querySelector<HTMLElement>("#ranking-history-content")!;
+  const rankingPlayer = createRankingPlayer();
   const rankingById = new Map<string, RankedTrack>();
   const historyCache = new Map<string, TrackHistoryPayload["history"]>();
   let activeHistoryTrackId: string | undefined;
@@ -273,10 +349,10 @@ import { members } from "../data/tracks";
     const expectedRank = track.expectedRank.toLocaleString("nl-NL", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
     const strength = formatStrength(track.strength);
     return `
-      <li class="ranking-row ${track.selected ? "" : "outside"}" data-rank="${track.rank}">
+      <li class="ranking-row ${track.selected ? "" : "outside"}" data-rank="${track.rank}" data-ranking-track-id="${escapeHtml(track.id)}">
         <button class="ranking-row-button" type="button" data-history-track-id="${escapeHtml(track.id)}" aria-label="Bekijk de keuzes voor ${escapeHtml(track.title)}" title="Verwachte plek ${track.expectedRank.toFixed(1)} · 90%-interval ${track.rankLow}–${track.rankHigh} · ${stability} · Klik voor alle keuzes">
           <span class="rank-number">${String(track.rank).padStart(2, "0")}</span>
-          <img src="${escapeHtml(track.cover)}" alt="" width="64" height="64" />
+          <span class="rank-cover"><img src="${escapeHtml(track.cover)}" alt="" width="64" height="64" /></span>
           <span class="rank-track">
             <span class="rank-track-main"><strong>${escapeHtml(track.title)}</strong><span>${escapeHtml(track.artist)}</span></span>
             <small class="rank-uncertainty"><span class="rank-strength-mobile">Sterkte ${strength} · </span>Verwacht ${expectedRank} · 90%: plek ${track.rankLow}–${track.rankHigh}</small>
@@ -284,6 +360,9 @@ import { members } from "../data/tracks";
           <span class="rank-owner"><i class="member-dot" style="--member-color:${member.color}"></i>${member.name}</span>
           <span class="rank-strength" title="Modelsterkte ${strength}; 0,00 is gemiddeld">${strength}</span>
           <strong class="rank-score"><span>${Math.round(track.top50Probability * 100)}%</span><i class="ph ph-caret-right" aria-hidden="true"></i></strong>
+        </button>
+        <button class="ranking-row-play" type="button" data-play-track-id="${escapeHtml(track.id)}" aria-label="Speel ${escapeHtml(track.title)} vanaf plek ${track.rank}" title="Speel vanaf plek ${track.rank}">
+          <i class="ph ph-play" aria-hidden="true"></i>
         </button>
       </li>
       ${track.rank === 50 ? '<li class="cutoff-marker"><span>De streep</span><small>Deze 50 gaan mee.</small></li>' : ""}`;
@@ -436,6 +515,7 @@ import { members } from "../data/tracks";
     copy.textContent = "Berekend uit alle 600 keuzes; de kans houdt ook rekening met onzekerheid rond de grens.";
     rankingById.clear();
     payload.ranking.forEach((track) => rankingById.set(track.id, track));
+    rankingPlayer.setRanking(payload.ranking);
     guideExample.innerHTML = guideExampleMarkup(payload.ranking[0]);
     list.innerHTML = payload.ranking.map(rowMarkup).join("");
   }

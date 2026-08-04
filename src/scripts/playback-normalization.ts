@@ -13,7 +13,9 @@ const SEEK_FADE_OUT_SECONDS = 0.012;
 const SEEK_FADE_IN_SECONDS = 0.04;
 
 export function getGlobalPlaybackVolume(): number {
-  const stored = Number(localStorage.getItem(VOLUME_STORAGE_KEY));
+  const storedValue = localStorage.getItem(VOLUME_STORAGE_KEY);
+  if (storedValue === null) return DEFAULT_VOLUME;
+  const stored = Number(storedValue);
   return Number.isFinite(stored) && stored >= 0 && stored <= 100 ? Math.round(stored) : DEFAULT_VOLUME;
 }
 
