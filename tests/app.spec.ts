@@ -2,8 +2,10 @@ import { expect, test } from "@playwright/test";
 import { chmod, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { discDurationSeconds, distributeRankedTracks } from "../src/data/disc-distribution";
 import { members, type MemberId, type Track } from "../src/data/tracks";
 import { authenticatedMember, requireMember, sessionCookie, verifyPin } from "../src/server/auth";
+import { buildDiscMetadata } from "../src/server/burn-packages";
 import { finalizeDiscLayout, getDiscLayout, saveDiscLayout } from "../src/server/disc-layout-storage";
 import { startPathForPhase } from "../src/server/group-state";
 import { getITunesPreviewUrl, listPinnedITunesTracks, pinITunesTrack, searchITunes } from "../src/server/itunes-cache";
@@ -476,7 +478,18 @@ test("handmatige nummers worden veilig bewaard en doen mee aan dubbele-detectie"
   }
 });
 
-test("een cd-indeling bevat exact de top 50 en wordt definitief vergrendeld", async ({}, testInfo) => {
+test("de automatische cd-verdeling houdt de ranglijst exact intact", async ({}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  const tracks = Array.from({ length: 50 }, (_, index) => ({ id: `track-${index + 1}`, duration: 180 }));
+  const discs = distributeRankedTracks(tracks);
+
+  expect(discs.map((disc) => disc.length)).toEqual([17, 17, 16]);
+  expect(discs.flat()).toEqual(tracks.map((track) => track.id));
+  expect(discs.map((disc) => discDurationSeconds(disc.map((id) => tracks.find((track) => track.id === id)!))))
+    .toEqual([3092, 3092, 2910]);
+});
+
+test("een cd-indeling bevat de top 50 in ranglijstvolgorde en wordt definitief vergrendeld", async ({}, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
   const directory = await mkdtemp(path.join(tmpdir(), "top50-discs-"));
   const storagePath = path.join(directory, "layout.json");
@@ -484,6 +497,9 @@ test("een cd-indeling bevat exact de top 50 en wordt definitief vergrendeld", as
   const ids = tracks.map((track) => track.id);
   const discs = [ids.slice(0, 17), ids.slice(17, 34), ids.slice(34)];
   try {
+    const reordered = discs.map((disc) => [...disc]);
+    [reordered[0][0], reordered[0][1]] = [reordered[0][1], reordered[0][0]];
+    await expect(saveDiscLayout(reordered, ids, storagePath)).rejects.toThrow(/volgorde van de ranglijst/);
     await saveDiscLayout(discs, ids, storagePath);
     const final = await finalizeDiscLayout(tracks, ids, storagePath);
     expect(final.finalizedAt).not.toBeNull();
@@ -492,6 +508,20 @@ test("een cd-indeling bevat exact de top 50 en wordt definitief vergrendeld", as
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("brandmetadata nummert cd 2 door vanaf de ranglijstpositie", async ({}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  const tracks = [makeTrack("viktor", 0), makeTrack("daniel", 0)];
+  const sources = new Map(tracks.map((track) => [track.id, { duration: track.duration }]));
+  const names = tracks.map((track, index) => `${18 + index} - ${track.artist} - ${track.title}.wav`);
+  const metadata = buildDiscMetadata(2, 18, tracks, sources, names);
+
+  expect(metadata.cue).toContain("  TRACK 18 AUDIO");
+  expect(metadata.cue).toContain("  TRACK 19 AUDIO");
+  expect(metadata.tracklist).toContain("18. Artiest viktor");
+  expect(metadata.instructions).toContain("First track number on disc op 18");
+  expect(metadata.tracklist).toContain("Gebruik CD 02.m3u8");
 });
 
 test("een cd-indeling telt ook de stiltes tussen nummers mee", async ({}, testInfo) => {
@@ -1419,7 +1449,7 @@ test("de definitieve ranglijst toont alle 100 nummers en de grens", async ({ pag
   await guideDialog.getByRole("button", { name: "Sluiten" }).click();
 });
 
-test("de cd-pagina verdeelt automatisch, ordent toegankelijk en laat alleen Viktor afronden", async ({ page, isMobile }) => {
+test("de cd-pagina verdeelt in ranglijstvolgorde en laat alleen Viktor afronden", async ({ page }) => {
   const topTracks = members.flatMap((member) => Array.from({ length: 10 }, (_, index) => makeTrack(member.id, index)));
   const status = groupStatus({ votingComplete: true, completedVoterCount: 5, finalizedCount: 5, phase: "ranglijst" });
   let layout: { discs: string[][]; topTrackIds: string[]; updatedAt: string; finalizedAt: string | null } | null = null;
@@ -1457,22 +1487,14 @@ test("de cd-pagina verdeelt automatisch, ordent toegankelijk en laat alleen Vikt
   await expect(page.locator("#storage-used")).toHaveText("1 GB");
   await expect(page.locator(".disc-track")).toHaveCount(50);
   await expect(page.locator("#disc-eyebrow")).toHaveText("Conceptindeling");
-  if (!isMobile) {
-    const listBox = await page.locator(".disc-track-list").first().boundingBox();
-    const selectBox = await page.locator(".disc-track-list select").first().boundingBox();
-    expect((listBox?.x ?? 0) + (listBox?.width ?? 0) - ((selectBox?.x ?? 0) + (selectBox?.width ?? 0))).toBeGreaterThanOrEqual(10);
-  }
-  if (isMobile) {
-    for (const control of [page.locator(".disc-row-controls button").first(), page.locator(".disc-row-controls select").first()]) {
-      const box = await control.boundingBox();
-      expect(box?.width).toBeGreaterThanOrEqual(44);
-      expect(box?.height).toBeGreaterThanOrEqual(44);
-    }
-  }
-  const firstSelect = page.locator(".disc-track [data-move-select]").first();
-  const current = await firstSelect.inputValue();
-  await firstSelect.selectOption(current === "0" ? "1" : "0");
-  await expect.poll(() => layout?.discs.flat().length).toBe(50);
+  await expect(page.locator("#disc-copy")).toContainText("ranglijstvolgorde");
+  await expect(page.locator(".disc-row-controls")).toHaveCount(0);
+  await expect.poll(() => layout?.discs.flat()).toEqual(topTracks.map((track) => track.id));
+  expect(await page.locator(".disc-track").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-track-id"))))
+    .toEqual(topTracks.map((track) => track.id));
+  const discSizes = layout!.discs.map((disc) => disc.length);
+  await expect(page.locator("[data-disc-range]").nth(0)).toHaveText(`Plek 01–${String(discSizes[0]).padStart(2, "0")}`);
+  await expect(page.locator("[data-disc-range]").nth(1)).toHaveText(`Plek ${String(discSizes[0] + 1).padStart(2, "0")}–${String(discSizes[0] + discSizes[1]).padStart(2, "0")}`);
   page.once("dialog", (dialog) => dialog.accept());
   await page.locator("#finalize-discs").click();
   await expect(page.locator("#disc-eyebrow")).toHaveText("Definitieve indeling");
@@ -1484,7 +1506,7 @@ test("de cd-pagina verdeelt automatisch, ordent toegankelijk en laat alleen Vikt
 test("een mislukte cd-save kan geen oudere indeling definitief maken", async ({ page }) => {
   const topTracks = members.flatMap((member) => Array.from({ length: 10 }, (_, index) => makeTrack(member.id, index)));
   const ids = topTracks.map((track) => track.id);
-  const layout = {
+  const savedLayout = {
     discs: [ids.slice(0, 17), ids.slice(17, 34), ids.slice(34)],
     topTrackIds: ids,
     updatedAt: "2026-08-03T12:00:00.000Z",
@@ -1494,20 +1516,19 @@ test("een mislukte cd-save kan geen oudere indeling definitief maken", async ({ 
   let finalizeRequests = 0;
   let saveAttempts = 0;
   await page.route("**/api/disc-layout", async (route) => {
-    if (route.request().method() === "GET") return route.fulfill({ json: { status, layout, tracks: topTracks, organizerId: "viktor" } });
+    if (route.request().method() === "GET") return route.fulfill({ json: { status, layout: null, tracks: topTracks, organizerId: "viktor" } });
     if (route.request().method() === "PUT") {
       saveAttempts += 1;
       await new Promise((resolve) => setTimeout(resolve, 150));
       if (saveAttempts === 1) return route.fulfill({ status: 500, json: { error: "Opslaan mislukt." } });
-      return route.fulfill({ json: { layout: { ...layout, discs: (route.request().postDataJSON() as { discs: string[][] }).discs } } });
+      return route.fulfill({ json: { layout: { ...savedLayout, discs: (route.request().postDataJSON() as { discs: string[][] }).discs } } });
     }
     finalizeRequests += 1;
-    return route.fulfill({ json: { layout: { ...layout, finalizedAt: new Date().toISOString() } } });
+    return route.fulfill({ json: { layout: { ...savedLayout, finalizedAt: new Date().toISOString() } } });
   });
 
   await page.goto("/cds");
-  const select = page.locator(".disc-track [data-move-select]").first();
-  await select.selectOption("1");
+  await expect(page.locator(".disc-track")).toHaveCount(50);
   page.once("dialog", (dialog) => dialog.accept());
   await page.locator("#finalize-discs").click();
   await expect(page.locator("#disc-message")).toContainText("Opslaan mislukt.");

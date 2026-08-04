@@ -10,7 +10,6 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
         <p class="eyebrow" id="disc-eyebrow">Conceptindeling</p>
         <h1 id="discs-title">Vijftig nummers. Drie cd’s.</h1>
         <p class="heading-copy" id="disc-copy">Na de laatste stem verdelen we de top 50 automatisch.</p>
-        <button class="text-action" type="button" id="auto-distribute" hidden>Opnieuw automatisch verdelen</button>
       </div>
       <div class="disc-summary" aria-label="Vijftig nummers verdeeld over drie schijfjes">
         <p><strong>50</strong><span>nummers</span></p>
@@ -36,7 +35,8 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
           <section class:list={["disc-column", { active: index === 0 }]} data-disc={index} style={`--disc-color:${discColors[index]}`}>
             <header>
               <h2>CD {String(index + 1).padStart(2, "0")}</h2>
-              <p><span data-disc-duration>0:00</span> / 80:00</p>
+              <p class="disc-rank-range" data-disc-range>Plek —</p>
+              <p class="disc-duration"><span data-disc-duration>0:00</span> / 80:00</p>
               <span class="capacity-track"><i></i></span>
             </header>
             <ol class="disc-track-list"></ol>
@@ -60,7 +60,11 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
           <p></p>
           <button class="text-action" id="retry-burn-packages" type="button">Opnieuw proberen</button>
         </div>
-        <p class="burn-package-note">Iedere cd bevat genummerde WAV-bestanden, een M3U8-afspeellijst, een CUE-bestand en een leesbare tracklijst.</p>
+        <p class="burn-package-note">De bestands- en tracknummers lopen over de drie cd’s door van 01 tot 50. Iedere cd bevat WAV-bestanden, een M3U8-afspeellijst, een CUE-bestand, een tracklijst en brandinstructies.</p>
+        <details class="burn-guide">
+          <summary>Doorlopende tracknummers branden in Windows</summary>
+          <p>Gebruik een brandprogramma waarin je het eerste tracknummer van een cd kunt instellen, zoals VEGAS Pro. Stel dit voor iedere cd in op het eerste nummer dat hierboven staat. Gewone brandprogramma’s kunnen de teller op iedere cd opnieuw bij 1 laten beginnen.</p>
+        </details>
       </section>
       <div class="disc-footer">
         <button class="outlined-action" type="button" id="finalize-discs" hidden>Indeling definitief maken</button>
@@ -83,6 +87,7 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
 </AppShell>
 
 <script>
+  import { MAX_DISC_SECONDS, discDurationSeconds, distributeRankedTracks } from "../data/disc-distribution";
   import { formatDuration, type Track } from "../data/tracks";
   import { getActiveMember } from "../scripts/member-session";
 
@@ -111,7 +116,6 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
   const message = document.querySelector<HTMLElement>("#disc-message")!;
   const copy = document.querySelector<HTMLElement>("#disc-copy")!;
   const eyebrow = document.querySelector<HTMLElement>("#disc-eyebrow")!;
-  const autoButton = document.querySelector<HTMLButtonElement>("#auto-distribute")!;
   const finalizeButton = document.querySelector<HTMLButtonElement>("#finalize-discs")!;
   const retryLayoutSave = document.querySelector<HTMLButtonElement>("#retry-layout-save")!;
   const burnPackages = document.querySelector<HTMLElement>("#burn-packages")!;
@@ -122,13 +126,13 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
   const burnError = document.querySelector<HTMLElement>("#burn-package-error")!;
   const retryBurnPackages = document.querySelector<HTMLButtonElement>("#retry-burn-packages")!;
   let tracks = new Map<string, Track>();
+  let rankingPositions = new Map<string, number>();
   let discs: string[][] = [[], [], []];
   let organizerId = "viktor";
   let finalizedAt: string | null = null;
   let activeDisc = 0;
   let saveQueue = Promise.resolve();
   let saveError = "";
-  let dragged: { id: string; disc: number } | undefined;
   let packagePoll: number | undefined;
 
   function escapeHtml(value: unknown): string {
@@ -136,7 +140,7 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
   }
 
   function duration(ids: string[]) {
-    return ids.reduce((total, id) => total + (tracks.get(id)?.duration ?? 0), 0) + Math.max(0, ids.length - 1) * 2;
+    return discDurationSeconds(ids.map((id) => ({ duration: tracks.get(id)?.duration ?? 0 })));
   }
 
   function formatBytes(bytes: number) {
@@ -219,39 +223,19 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
     }
   }
 
-  function distribute(source: Track[]): string[][] {
-    const result: string[][] = [[], [], []];
-    const totals = [0, 0, 0];
-    [...source].sort((a, b) => b.duration - a.duration || a.id.localeCompare(b.id)).forEach((track) => {
-      const target = totals.indexOf(Math.min(...totals));
-      if (result[target].length > 0) totals[target] += 2;
-      result[target].push(track.id);
-      totals[target] += track.duration;
-    });
-    return result;
-  }
-
   function editable() {
     return memberId === organizerId && !finalizedAt;
   }
 
-  function rowMarkup(id: string, discIndex: number, index: number) {
+  function rowMarkup(id: string) {
     const track = tracks.get(id);
     if (!track) return "";
-    const canEdit = editable();
+    const rank = rankingPositions.get(id) ?? 0;
     return `
-      <li class="disc-track" draggable="${canEdit}" data-track-id="${escapeHtml(id)}">
-        <i class="ph ph-dots-six-vertical drag-icon" aria-hidden="true"></i>
+      <li class="disc-track" data-track-id="${escapeHtml(id)}" data-rank="${rank}">
         <img src="${escapeHtml(track.cover)}" alt="" width="56" height="56" />
-        <span><strong>${String(index + 1).padStart(2, "0")} &nbsp; ${escapeHtml(track.title)}</strong><small>${escapeHtml(track.artist)}</small></span>
+        <span><strong>${String(rank).padStart(2, "0")} &nbsp; ${escapeHtml(track.title)}</strong><small>${escapeHtml(track.artist)}</small></span>
         <time>${formatDuration(track.duration)}</time>
-        <span class="disc-row-controls">
-          <button type="button" data-order="up" aria-label="Zet ${escapeHtml(track.title)} een plek omhoog" ${!canEdit || index === 0 ? "disabled" : ""}><i class="ph ph-caret-up"></i></button>
-          <button type="button" data-order="down" aria-label="Zet ${escapeHtml(track.title)} een plek omlaag" ${!canEdit || index === discs[discIndex].length - 1 ? "disabled" : ""}><i class="ph ph-caret-down"></i></button>
-          <label><span class="sr-only">Verplaats ${escapeHtml(track.title)} naar</span><select data-move-select ${canEdit ? "" : "disabled"}>
-            ${[0, 1, 2].map((target) => `<option value="${target}" ${target === discIndex ? "selected" : ""}>CD ${target + 1}</option>`).join("")}
-          </select></label>
-        </span>
       </li>`;
   }
 
@@ -259,24 +243,28 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
     grid.querySelectorAll<HTMLElement>("[data-disc]").forEach((column, discIndex) => {
       const total = duration(discs[discIndex]);
       column.classList.toggle("active", discIndex === activeDisc);
-      column.classList.toggle("over-capacity", total > 4800);
+      column.classList.toggle("over-capacity", total > MAX_DISC_SECONDS);
       column.querySelector<HTMLElement>("[data-disc-duration]")!.textContent = formatDuration(total);
-      column.querySelector<HTMLElement>(".capacity-track i")!.style.width = `${Math.min(100, total / 48)}%`;
-      column.querySelector<HTMLOListElement>(".disc-track-list")!.innerHTML = discs[discIndex].map((id, index) => rowMarkup(id, discIndex, index)).join("");
+      column.querySelector<HTMLElement>(".capacity-track i")!.style.width = `${Math.min(100, total / (MAX_DISC_SECONDS / 100))}%`;
+      const firstRank = rankingPositions.get(discs[discIndex][0]);
+      const lastRank = rankingPositions.get(discs[discIndex].at(-1)!);
+      column.querySelector<HTMLElement>("[data-disc-range]")!.textContent = firstRank && lastRank
+        ? `Plek ${String(firstRank).padStart(2, "0")}–${String(lastRank).padStart(2, "0")}`
+        : "Geen nummers";
+      column.querySelector<HTMLOListElement>(".disc-track-list")!.innerHTML = discs[discIndex].map(rowMarkup).join("");
     });
     tabs.forEach((tab, index) => tab.setAttribute("aria-pressed", String(index === activeDisc)));
-    const over = discs.some((disc) => duration(disc) > 4800);
-    autoButton.hidden = !editable();
+    const over = discs.some((disc) => duration(disc) > MAX_DISC_SECONDS);
     finalizeButton.hidden = memberId !== organizerId || Boolean(finalizedAt);
     finalizeButton.disabled = !editable() || over || Boolean(saveError);
     finalizeButton.textContent = "Indeling definitief maken";
     eyebrow.textContent = finalizedAt ? "Definitieve indeling" : "Conceptindeling";
     copy.textContent = finalizedAt
-      ? "Deze volgorde is vastgezet en klaar om op drie cd’s te branden."
+      ? "De top 50 loopt in ranglijstvolgorde door van cd 1 naar cd 3 en staat nu vast."
       : editable()
-        ? "De verdeling is automatisch gemaakt. Pas volgorde of cd aan; wijzigingen worden direct bewaard."
-        : "Viktor beheert de conceptindeling; vernieuw de pagina om zijn laatste wijzigingen te zien.";
-    message.textContent = saveError || (over ? "Minstens één cd is langer dan 80 minuten." : "");
+        ? "De ranglijstvolgorde ligt vast. De twee beste knippunten zijn automatisch gekozen op basis van de echte audiolengtes."
+        : "De ranglijstvolgorde ligt vast. Viktor kan deze automatische indeling definitief maken.";
+    message.textContent = saveError || (over ? "Zelfs de best passende verdeling bevat een cd die langer is dan 80 minuten." : "");
     message.classList.toggle("error", Boolean(saveError) || over);
     retryLayoutSave.hidden = !saveError || !editable();
   }
@@ -301,72 +289,10 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
     }).finally(render);
   }
 
-  function moveWithin(discIndex: number, index: number, direction: -1 | 1) {
-    if (!editable()) return;
-    const target = index + direction;
-    if (target < 0 || target >= discs[discIndex].length) return;
-    [discs[discIndex][index], discs[discIndex][target]] = [discs[discIndex][target], discs[discIndex][index]];
-    queueSave();
-    render();
-  }
-
-  function moveTo(id: string, fromDisc: number, toDisc: number, targetIndex = discs[toDisc]?.length ?? 0) {
-    if (!editable() || fromDisc === toDisc && discs[fromDisc].indexOf(id) === targetIndex) return;
-    const fromIndex = discs[fromDisc].indexOf(id);
-    if (fromIndex < 0) return;
-    discs[fromDisc].splice(fromIndex, 1);
-    const adjusted = fromDisc === toDisc && fromIndex < targetIndex ? targetIndex - 1 : targetIndex;
-    discs[toDisc].splice(Math.max(0, Math.min(adjusted, discs[toDisc].length)), 0, id);
-    activeDisc = toDisc;
-    queueSave();
-    render();
-  }
-
   tabs.forEach((tab, index) => tab.addEventListener("click", () => { activeDisc = index; render(); }));
-  grid.addEventListener("click", (event) => {
-    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-order]");
-    const row = button?.closest<HTMLElement>("[data-track-id]");
-    const column = row?.closest<HTMLElement>("[data-disc]");
-    if (!button || !row || !column) return;
-    const discIndex = Number(column.dataset.disc);
-    moveWithin(discIndex, discs[discIndex].indexOf(row.dataset.trackId!), button.dataset.order === "up" ? -1 : 1);
-  });
-  grid.addEventListener("change", (event) => {
-    const select = (event.target as HTMLElement).closest<HTMLSelectElement>("[data-move-select]");
-    const row = select?.closest<HTMLElement>("[data-track-id]");
-    const column = row?.closest<HTMLElement>("[data-disc]");
-    if (select && row && column) moveTo(row.dataset.trackId!, Number(column.dataset.disc), Number(select.value));
-  });
-  grid.addEventListener("dragstart", (event) => {
-    const row = (event.target as HTMLElement).closest<HTMLElement>("[data-track-id]");
-    const column = row?.closest<HTMLElement>("[data-disc]");
-    if (!editable() || !row || !column) return event.preventDefault();
-    dragged = { id: row.dataset.trackId!, disc: Number(column.dataset.disc) };
-    row.classList.add("is-dragging");
-  });
-  grid.addEventListener("dragend", (event) => {
-    (event.target as HTMLElement).closest("[data-track-id]")?.classList.remove("is-dragging");
-    dragged = undefined;
-  });
-  grid.addEventListener("dragover", (event) => { if (editable()) event.preventDefault(); });
-  grid.addEventListener("drop", (event) => {
-    event.preventDefault();
-    const column = (event.target as HTMLElement).closest<HTMLElement>("[data-disc]");
-    if (!dragged || !column) return;
-    const targetDisc = Number(column.dataset.disc);
-    const targetRow = (event.target as HTMLElement).closest<HTMLElement>("[data-track-id]");
-    const targetIndex = targetRow ? discs[targetDisc].indexOf(targetRow.dataset.trackId!) : discs[targetDisc].length;
-    moveTo(dragged.id, dragged.disc, targetDisc, targetIndex);
-  });
-  autoButton.addEventListener("click", () => {
-    if (!editable() || !window.confirm("Alle handmatige wijzigingen vervangen door een nieuwe automatische verdeling?")) return;
-    discs = distribute([...tracks.values()]);
-    queueSave();
-    render();
-  });
   finalizeButton.addEventListener("click", async () => {
-    if (!editable() || discs.some((disc) => duration(disc) > 4800)) return;
-    if (!window.confirm("De server controleert de echte audiolengtes en zet daarna de volgorde definitief vast. Hierna worden de drie brandpakketten gemaakt en kan niemand de indeling nog wijzigen. Doorgaan?")) return;
+    if (!editable() || discs.some((disc) => duration(disc) > MAX_DISC_SECONDS)) return;
+    if (!window.confirm("De server controleert de echte audiolengtes en zet de ranglijstvolgorde en cd-grenzen definitief vast. Hierna worden de drie brandpakketten gemaakt. Doorgaan?")) return;
     finalizeButton.disabled = true;
     await saveQueue;
     if (saveError) {
@@ -403,7 +329,8 @@ const discColors = ["#980f1d", "#174c3b", "#c18a16"];
         return;
       }
       tracks = new Map(payload.tracks.map((track) => [track.id, track]));
-      discs = payload.layout?.discs.map((disc) => [...disc]) ?? distribute(payload.tracks);
+      rankingPositions = new Map(payload.tracks.map((track, index) => [track.id, index + 1]));
+      discs = payload.layout?.discs.map((disc) => [...disc]) ?? distributeRankedTracks(payload.tracks);
       finalizedAt = payload.layout?.finalizedAt ?? null;
       gate.hidden = true;
       content.hidden = false;

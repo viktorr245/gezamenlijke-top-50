@@ -32,8 +32,9 @@ function validateLayoutParts(discsValue: unknown, topTrackIdsValue: unknown): { 
   if (flattened.length !== 50 || new Set(flattened).size !== 50 || new Set(topTrackIds).size !== 50) {
     throw new Error("Ieder nummer moet precies één keer in de cd-indeling staan.");
   }
-  const expected = new Set(topTrackIds);
-  if (flattened.some((id) => !expected.has(id))) throw new Error("De cd-indeling komt niet overeen met de top 50.");
+  if (flattened.some((id, index) => id !== topTrackIds[index])) {
+    throw new Error("De cd’s moeten exact de volgorde van de ranglijst volgen.");
+  }
   return { discs: discs as string[][], topTrackIds };
 }
 
@@ -88,7 +89,7 @@ export async function saveDiscLayout(
     const existing = await readLayout(storagePath);
     const sameRanking = existing
       && existing.topTrackIds.length === parts.topTrackIds.length
-      && existing.topTrackIds.every((id) => parts.topTrackIds.includes(id));
+      && existing.topTrackIds.every((id, index) => id === parts.topTrackIds[index]);
     if (existing?.finalizedAt && sameRanking) throw new Error("De cd-indeling is al definitief en kan niet meer worden gewijzigd.");
     const layout: DiscLayout = { ...parts, updatedAt: new Date().toISOString(), finalizedAt: null };
     await writeLayout(storagePath, layout);
@@ -109,8 +110,10 @@ export async function finalizeDiscLayout(
     if (!layout) throw new Error("Er is nog geen cd-indeling om definitief te maken.");
     if (layout.finalizedAt) return layout;
     const tracksById = new Map(tracks.map((track) => [track.id, track]));
-    const expected = new Set(expectedTopTrackIds.length > 0 ? expectedTopTrackIds : layout.topTrackIds);
-    if (expected.size !== 50 || layout.topTrackIds.some((id) => !expected.has(id))) throw new Error("De ranglijst en cd-indeling komen niet meer overeen.");
+    const expected = expectedTopTrackIds.length > 0 ? expectedTopTrackIds : layout.topTrackIds;
+    if (expected.length !== 50 || layout.discs.flat().some((id, index) => id !== expected[index])) {
+      throw new Error("De ranglijst en cd-indeling komen niet meer overeen.");
+    }
     const hasUnknownTrack = layout.discs.flat().some((id) => !tracksById.has(id));
     const overCapacity = layout.discs.some((disc) => (
       disc.reduce((total, id) => total + (tracksById.get(id)?.duration ?? 0), 0) + Math.max(0, disc.length - 1) * 2 > 4800

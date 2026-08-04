@@ -41,15 +41,17 @@ Klik op een nummer om alle twaalf vergelijkingen te bekijken, gegroepeerd per de
 Daarna:
 
 1. leest de server met FFprobe de werkelijke lengte van de bewaarde audiobronnen;
-2. verdeelt de website de top 50 automatisch over drie cd’s, steeds met het langste resterende nummer op de op dat moment kortste cd;
-3. bewaakt de website de grens van 80 minuten per cd, inclusief twee seconden tussen opeenvolgende tracks;
-4. kan Viktor nummers naar een andere cd verplaatsen en de volgorde aanpassen;
-5. controleert de server de werkelijke lengtes nogmaals bij definitief maken;
+2. houdt de website de ranglijst exact aan: cd 1 begint bij nummer 1, cd 2 gaat verder waar cd 1 stopt en cd 3 gaat daar weer verder;
+3. probeert de server alle mogelijke paren van knippunten en kiest de indeling waarvan de langste cd zo kort mogelijk is;
+4. bewaakt de website de grens van 80 minuten per cd, inclusief twee seconden tussen opeenvolgende tracks;
+5. controleert de server de volgorde en werkelijke lengtes nogmaals bij definitief maken;
 6. maakt de server drie brandklare downloadpakketten.
 
-De andere deelnemers kunnen de indeling en downloads wel bekijken. Een definitieve indeling kan via de website niet meer worden gewijzigd.
+Viktor hoeft de verdeling alleen definitief te maken; handmatig verplaatsen is bewust niet mogelijk, omdat dat de ranglijstvolgorde zou doorbreken. De andere deelnemers kunnen de indeling en downloads bekijken. Een definitieve indeling kan via de website niet meer worden gewijzigd.
 
-Ieder cd-pakket is een ZIP met genummerde WAV-bestanden in de vastgelegde volgorde, een UTF-8 M3U8-afspeellijst, een CUE-bestand en `Tracklijst.txt`. De WAV-bestanden zijn 44,1 kHz, 16-bit stereo en worden rechtstreeks vanuit de bewaarde originele audiobron gemaakt. Daarnaast is er één download met de pakketten van alle drie cd’s. De pagina toont tijdens het maken per nummer de voortgang. Als de voorbereiding mislukt, kan Viktor die opnieuw starten.
+Ieder cd-pakket is een ZIP met genummerde WAV-bestanden in de vastgelegde volgorde, een UTF-8 M3U8-afspeellijst, een CUE-bestand, `Tracklijst.txt` en `BRANDEN OP WINDOWS.txt`. De nummering loopt over de schijven door van 01 tot 50. De WAV-bestanden zijn 44,1 kHz, 16-bit stereo en worden rechtstreeks vanuit de bewaarde originele audiobron gemaakt. Daarnaast is er één download met de pakketten van alle drie cd’s. De pagina toont tijdens het maken per nummer de voortgang. Als de voorbereiding mislukt, kan Viktor die opnieuw starten.
+
+Voor doorlopende **fysieke** tracknummers moet ook het brandprogramma het eerste tracknummer van een schijf kunnen instellen. De meegeleverde Windows-instructies beschrijven dit voor VEGAS Pro: zet bij cd 2 en cd 3 in **Project Properties > Audio CD > First track number on disc** het eerste nummer uit de tracklijst en brand daarna als Disc-at-Once Audio CD. Het CUE-bestand bevat dezelfde nummering voor andere programma’s die dit ondersteunen. Veel eenvoudige brandprogramma’s beginnen iedere losse cd toch opnieuw bij track 1; de bestandsnamen en afspeellijst blijven dan wel correct. Test dit daarom bij voorkeur eerst met een cd-rw.
 
 ## Hoe de top 50 wordt berekend
 
@@ -179,7 +181,7 @@ Dit maakt een niet-gecommitte `.env` met een willekeurig sessiegeheim en vijf un
 - moet iedere deelnemer zich aanmelden met naam en pincode;
 - bewaart de browser alleen een ondertekende `HttpOnly`-sessiecookie;
 - kan een deelnemer alleen zijn eigen inzending, audio en stemmen aanpassen;
-- kan alleen Viktor de cd-indeling aanpassen, definitief maken en brandpakketten opnieuw opbouwen;
+- kan alleen Viktor de automatische cd-indeling definitief maken en brandpakketten opnieuw opbouwen;
 - worden niet-aangemelde pagina- en API-verzoeken geweigerd.
 
 `AUTH_SECRET` moet dan minimaal 32 tekens bevatten. `MEMBER_PINS` moet voor alle vijf deelnemers een unieke pincode van minimaal vier tekens bevatten. Na acht mislukte pogingen voor dezelfde deelnemer en hetzelfde IP-adres wacht de server vijftien minuten voordat nieuwe pogingen worden geaccepteerd. Die limiet leeft in het geheugen van één serverproces.
@@ -257,6 +259,6 @@ De tests controleren onder meer:
 - de 120 voortgangsmarkeringen, stemmen, terugnemen en expliciet definitief maken;
 - zoeken, uploaden of YouTube-audio ophalen, audioverplichting en het ontbreken van een betekenisloze inzendvolgorde;
 - alle honderd ranglijstregels, de grens na nummer 50 en de keuzegeschiedenis per nummer;
-- automatische cd-verdeling, toegankelijke verplaatsing en definitief maken;
+- automatische cd-verdeling in vaste ranglijstvolgorde, doorlopende tracknummering en definitief maken;
 - geldige streaming-ZIP’s met Unicode-bestandsnamen en de brandpakketdownloads;
 - het ontbreken van document-scroll en horizontale overflow op de geteste schermgroottes.

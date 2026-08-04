@@ -1,4 +1,5 @@
 import type { APIRoute } from "astro";
+import { distributeRankedTracks } from "../../data/disc-distribution";
 import { AuthorizationError, requireOrganizer } from "../../server/auth";
 import { ensureBurnPackages, resolveBurnAudioSources, validateBurnCapacity } from "../../server/burn-packages";
 import { finalizeDiscLayout, getDiscLayout, saveDiscLayout } from "../../server/disc-layout-storage";
@@ -20,14 +21,24 @@ async function rankingData() {
   return { group, ranking, topTracks: ranking.slice(0, 50) };
 }
 
+function sameDiscs(left: unknown, right: string[][]): boolean {
+  return Array.isArray(left) && left.every((disc) => Array.isArray(disc))
+    && left.length === right.length
+    && left.every((disc: unknown[], discIndex) => disc.length === right[discIndex]?.length
+      && disc.every((id, trackIndex) => id === right[discIndex][trackIndex]));
+}
+
 export const GET: APIRoute = async () => {
   try {
     const { group, topTracks } = await rankingData();
     const sources = topTracks.length > 0 ? await resolveBurnAudioSources(topTracks) : new Map();
     const measuredTracks = topTracks.map((track) => ({ ...track, duration: sources.get(track.id)?.duration ?? track.duration }));
+    const expectedDiscs = measuredTracks.length === 50 ? distributeRankedTracks(measuredTracks) : [[], [], []];
     const storedLayout = group.status.votingComplete ? await getDiscLayout() : undefined;
-    const topIds = new Set(topTracks.map((track) => track.id));
-    const layout = storedLayout?.topTrackIds.length === topIds.size && storedLayout.topTrackIds.every((id) => topIds.has(id))
+    const topIds = topTracks.map((track) => track.id);
+    const layout = storedLayout?.topTrackIds.length === topIds.length
+      && storedLayout.topTrackIds.every((id, index) => id === topIds[index])
+      && sameDiscs(storedLayout.discs, expectedDiscs)
       ? storedLayout
       : undefined;
     return Response.json({
@@ -49,7 +60,13 @@ export const PUT: APIRoute = async ({ request }) => {
     const { group, topTracks } = await rankingData();
     if (!group.status.votingComplete) throw new Error("De cd-indeling komt beschikbaar zodra iedereen klaar is met stemmen.");
     const topTrackIds = topTracks.map((track) => track.id);
-    return Response.json({ layout: await saveDiscLayout(body.discs, topTrackIds) }, { headers: { "Cache-Control": "no-store" } });
+    const sources = await resolveBurnAudioSources(topTracks);
+    const measuredTracks = topTracks.map((track) => ({ ...track, duration: sources.get(track.id)?.duration ?? track.duration }));
+    const expectedDiscs = distributeRankedTracks(measuredTracks);
+    if (!sameDiscs(body.discs, expectedDiscs)) {
+      throw new Error("De cd-grenzen moeten automatisch uit de werkelijke audiolengtes worden berekend.");
+    }
+    return Response.json({ layout: await saveDiscLayout(expectedDiscs, topTrackIds) }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return errorResponse(error);
   }
@@ -66,6 +83,9 @@ export const POST: APIRoute = async ({ request }) => {
     if (!layout) throw new Error("Er is nog geen cd-indeling om definitief te maken.");
     const sources = await validateBurnCapacity(layout, topTracks);
     const tracksWithActualDuration = topTracks.map((track) => ({ ...track, duration: sources.get(track.id)?.duration ?? track.duration }));
+    if (!sameDiscs(layout.discs, distributeRankedTracks(tracksWithActualDuration))) {
+      throw new Error("De cd-grenzen komen niet overeen met de automatische verdeling.");
+    }
     const finalized = await finalizeDiscLayout(tracksWithActualDuration, topTracks.map((track) => track.id));
     void ensureBurnPackages(finalized, topTracks);
     return Response.json(

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { mkdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
+import { MAX_DISC_SECONDS, TRACK_GAP_SECONDS } from "../data/disc-distribution";
 import { formatDuration, type Track } from "../data/tracks";
 import { getAudioAsset } from "./audio-storage";
 import { getDiscLayout, type DiscLayout } from "./disc-layout-storage";
@@ -13,9 +14,8 @@ import { ZipWriter } from "./zip-writer";
 const DEFAULT_STORAGE_ROOT = STORAGE_ROOT;
 const FFMPEG_PATH = process.env.FFMPEG_PATH ?? "ffmpeg";
 const FFPROBE_PATH = process.env.FFPROBE_PATH ?? "ffprobe";
-const MAX_DISC_SECONDS = 80 * 60;
-const TRACK_GAP_SECONDS = 2;
 const PROCESS_TIMEOUT_MS = 15 * 60 * 1000;
+const BURN_PACKAGE_VERSION = 2;
 
 type AudioSource = { path: string; duration: number };
 type OriginalAudioAsset = NonNullable<Awaited<ReturnType<typeof getAudioAsset>>>;
@@ -43,15 +43,15 @@ export async function loadFinalBurnContext(): Promise<{ layout: DiscLayout; trac
   const layout = await getDiscLayout();
   if (!layout?.finalizedAt) throw new Error("De cd-indeling is nog niet definitief.");
   const ranking = calculateFinalRanking(group.tracks, Object.values(group.voteChoices).flat());
-  const expected = new Set(ranking.slice(0, 50).map((track) => track.id));
-  if (layout.topTrackIds.length !== expected.size || layout.topTrackIds.some((id) => !expected.has(id))) {
+  const expected = ranking.slice(0, 50).map((track) => track.id);
+  if (layout.topTrackIds.length !== expected.length || layout.topTrackIds.some((id, index) => id !== expected[index])) {
     throw new Error("De cd-indeling hoort niet meer bij de huidige ranglijst.");
   }
   return { layout, tracks: group.tracks };
 }
 
 function packageKey(layout: DiscLayout): string {
-  return createHash("sha256").update(JSON.stringify({ discs: layout.discs, finalizedAt: layout.finalizedAt })).digest("hex").slice(0, 24);
+  return createHash("sha256").update(JSON.stringify({ version: BURN_PACKAGE_VERSION, discs: layout.discs, finalizedAt: layout.finalizedAt })).digest("hex").slice(0, 24);
 }
 
 function packageDirectory(layout: DiscLayout, storageRoot = DEFAULT_STORAGE_ROOT): string {
@@ -144,7 +144,7 @@ export async function validateBurnCapacity(layout: DiscLayout, tracks: Track[]):
     const audioSeconds = disc.reduce((total, id) => total + sources.get(id)!.duration, 0);
     const burnSeconds = audioSeconds + Math.max(0, disc.length - 1) * TRACK_GAP_SECONDS;
     if (burnSeconds > MAX_DISC_SECONDS) {
-      throw new Error(`CD ${index + 1} duurt met de werkelijke audio en trackovergangen ${formatDuration(Math.ceil(burnSeconds))}. Verplaats eerst een nummer naar een andere cd.`);
+      throw new Error(`CD ${index + 1} duurt met de werkelijke audio en trackovergangen ${formatDuration(Math.ceil(burnSeconds))}. De top 50 past in deze volgorde niet binnen drie cd’s van 80 minuten.`);
     }
   });
   return sources;
@@ -163,7 +163,13 @@ function playlistValue(value: string): string {
   return value.replace(/[\r\n\u0000]+/g, " ").trim();
 }
 
-function metadataFiles(discNumber: number, tracks: Track[], sources: Map<string, AudioSource>, names: string[]) {
+export function buildDiscMetadata(
+  discNumber: number,
+  firstTrackNumber: number,
+  tracks: Track[],
+  sources: Map<string, Pick<AudioSource, "duration">>,
+  names: string[],
+) {
   const folder = `CD ${String(discNumber).padStart(2, "0")}`;
   const total = tracks.reduce((sum, track) => sum + sources.get(track.id)!.duration, 0);
   const playlist = ["#EXTM3U", ...tracks.flatMap((track, index) => [
@@ -175,7 +181,7 @@ function metadataFiles(discNumber: number, tracks: Track[], sources: Map<string,
     `TITLE "${folder}"`,
     ...tracks.flatMap((track, index) => [
       `FILE "${cueValue(names[index])}" WAVE`,
-      `  TRACK ${String(index + 1).padStart(2, "0")} AUDIO`,
+      `  TRACK ${String(firstTrackNumber + index).padStart(2, "0")} AUDIO`,
       `    TITLE "${cueValue(track.title)}"`,
       `    PERFORMER "${cueValue(track.artist)}"`,
       "    INDEX 01 00:00:00",
@@ -186,13 +192,30 @@ function metadataFiles(discNumber: number, tracks: Track[], sources: Map<string,
     `${folder} — De gezamenlijke 50`,
     `${tracks.length} nummers · ${formatDuration(Math.round(total))}`,
     "",
-    ...tracks.map((track, index) => `${String(index + 1).padStart(2, "0")}. ${playlistValue(track.artist)} — ${playlistValue(track.title)} (${formatDuration(Math.round(sources.get(track.id)!.duration))})`),
+    ...tracks.map((track, index) => `${String(firstTrackNumber + index).padStart(2, "0")}. ${playlistValue(track.artist)} — ${playlistValue(track.title)} (${formatDuration(Math.round(sources.get(track.id)!.duration))})`),
     "",
-    "Brand als audio-cd, niet als data-cd. Gebruik CD 01.m3u8 om de bestanden in de juiste volgorde te laden.",
+    `Brand als audio-cd, niet als data-cd. Gebruik ${folder}.m3u8 om de bestanden in de juiste volgorde te laden.`,
     "De WAV-bestanden zijn vanuit de bewaarde originele audiobronnen omgezet naar 44,1 kHz, 16-bit stereo.",
     "",
   ].join("\r\n");
-  return { folder, playlist, cue, tracklist };
+  const instructions = [
+    `${folder} branden met doorlopende tracknummers`,
+    "",
+    `Deze cd bevat plek ${String(firstTrackNumber).padStart(2, "0")} tot en met ${String(firstTrackNumber + tracks.length - 1).padStart(2, "0")} van de gezamenlijke top 50.`,
+    `Het eerste fysieke tracknummer op deze cd hoort daarom ${String(firstTrackNumber).padStart(2, "0")} te zijn.`,
+    "",
+    "Aanbevolen op Windows met VEGAS Pro:",
+    "1. Importeer de WAV-bestanden en zet ze in bestandsnaamvolgorde op de tijdlijn.",
+    "2. Kies Tools > Lay Out Audio CD from Events.",
+    `3. Open Project Properties > Audio CD en zet First track number on disc op ${firstTrackNumber}.`,
+    "4. Kies Tools > Burn Disc > Disc-at-Once Audio CD en controleer vóór het branden de volgorde.",
+    "",
+    `Het bestand ${folder}.cue bevat dezelfde doorlopende tracknummers voor andere brandprogramma's die dit ondersteunen.`,
+    "Veel eenvoudige brandprogramma's beginnen iedere losse cd toch bij track 1. De bestandsnamen en afspeellijst blijven dan wel correct, maar het scherm van de cd-speler niet.",
+    "Test de werkwijze bij voorkeur eerst met een cd-rw en controleer of de eerste track het nummer hierboven toont.",
+    "",
+  ].join("\r\n");
+  return { folder, playlist, cue, tracklist, instructions };
 }
 
 async function transcodeToCdWav(sourcePath: string, outputPath: string) {
@@ -208,6 +231,7 @@ async function transcodeToCdWav(sourcePath: string, outputPath: string) {
 async function createDiscPackage(
   outputPath: string,
   discNumber: number,
+  firstTrackNumber: number,
   tracks: Track[],
   sources: Map<string, AudioSource>,
   status: BurnPackageStatus,
@@ -216,7 +240,7 @@ async function createDiscPackage(
 ) {
   const temporaryZip = `${outputPath}.${randomUUID()}.tmp`;
   const writer = await ZipWriter.create(temporaryZip);
-  const names = tracks.map((track, index) => `${String(index + 1).padStart(2, "0")} - ${safeFilePart(track.artist)} - ${safeFilePart(track.title)}.wav`);
+  const names = tracks.map((track, index) => `${String(firstTrackNumber + index).padStart(2, "0")} - ${safeFilePart(track.artist)} - ${safeFilePart(track.title)}.wav`);
   try {
     for (let index = 0; index < tracks.length; index += 1) {
       const track = tracks[index];
@@ -231,10 +255,11 @@ async function createDiscPackage(
       }
       status.completedTracks += 1;
     }
-    const metadata = metadataFiles(discNumber, tracks, sources, names);
+    const metadata = buildDiscMetadata(discNumber, firstTrackNumber, tracks, sources, names);
     await writer.addBuffer(`${metadata.folder}/${metadata.folder}.m3u8`, metadata.playlist, modifiedAt);
     await writer.addBuffer(`${metadata.folder}/${metadata.folder}.cue`, metadata.cue, modifiedAt);
     await writer.addBuffer(`${metadata.folder}/Tracklijst.txt`, metadata.tracklist, modifiedAt);
+    await writer.addBuffer(`${metadata.folder}/BRANDEN OP WINDOWS.txt`, metadata.instructions, modifiedAt);
     await writer.close();
     await rename(temporaryZip, outputPath);
   } catch (error) {
@@ -251,7 +276,11 @@ async function createAllPackage(outputPath: string, discPaths: string[], modifie
     for (let index = 0; index < discPaths.length; index += 1) {
       await writer.addFile(`CD ${String(index + 1).padStart(2, "0")}.zip`, discPaths[index], modifiedAt);
     }
-    await writer.addBuffer("LEESMIJ.txt", "Pak eerst dit archief uit. Daarna bevat iedere cd zijn eigen brandklare ZIP-bestand.\r\n", modifiedAt);
+    await writer.addBuffer("LEESMIJ.txt", [
+      "Pak eerst dit archief uit. Daarna bevat iedere cd zijn eigen brandklare ZIP-bestand.",
+      "De ranglijstvolgorde en nummering lopen door over alle drie cd's: open per cd BRANDEN OP WINDOWS.txt voordat je gaat branden.",
+      "",
+    ].join("\r\n"), modifiedAt);
     await writer.close();
     await rename(temporaryZip, outputPath);
   } catch (error) {
@@ -321,9 +350,11 @@ export async function ensureBurnPackages(layout: DiscLayout, tracks: Track[], st
       await assertStorageCapacity(Math.ceil(wavBytes * 2.05), storageRoot);
       await mkdir(files.directory, { recursive: true });
       const modifiedAt = new Date(layout.finalizedAt!);
+      let firstTrackNumber = 1;
       for (let index = 0; index < 3; index += 1) {
         const discTracks = layout.discs[index].map((id) => trackById.get(id)!).filter(Boolean);
-        await createDiscPackage(files.discs[index], index + 1, discTracks, sources, status, files.directory, modifiedAt);
+        await createDiscPackage(files.discs[index], index + 1, firstTrackNumber, discTracks, sources, status, files.directory, modifiedAt);
+        firstTrackNumber += discTracks.length;
       }
       status.currentDisc = null;
       status.currentTrack = "Compleet pakket samenstellen";
